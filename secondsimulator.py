@@ -3,6 +3,9 @@ from tkinter import ttk, filedialog, messagebox
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import matplotlib.pyplot as plt
 import pandas as pd
+import io
+from PIL import Image # Required for saving images via io.BytesIO
+import openpyxl # Explicitly import openpyxl for image handling
 
 # Constants for fees (good practice to define them)
 LAWYER_FEE_RATE = 0.015
@@ -120,7 +123,7 @@ class PropertyTab:
 
         ttk.Label(self.input_frame, text="אחוז מימון (LTV) %:").grid(row=r, column=0, sticky="e", padx=padx, pady=pady)
         self.ltv_entry = new_entry()
-        self.ltv_entry.insert(0, "50") # Default LTV
+        self.ltv_entry.insert(0, "70") # Default LTV
         self.ltv_entry.grid(row=r, column=1, sticky="w", pady=pady)
         r += 1
 
@@ -224,6 +227,11 @@ class PropertyTab:
 
         self.df_list = [None, None, None]
 
+        # Initialize these attributes to avoid AttributeError if not calculated yet
+        self.calculated_results = {}
+        self.loan_scenarios_data = []
+        self.loan_scenarios_rent_comparison = []
+
     def clear_results(self):
         self.tax_label.config(text="")
         self.downpayment_label.config(text="")
@@ -239,44 +247,60 @@ class PropertyTab:
         for canvas in self.canvas_list:
             canvas.draw()
         self.df_list = [None, None, None]
+        # Ensure these are cleared too when results are cleared
+        self.calculated_results = {}
+        self.loan_scenarios_data = []
+        self.loan_scenarios_rent_comparison = []
+
 
     def calculate(self):
         self.clear_results() # Clear previous results before new calculation
 
+        # A flag to check if the current tab is the active one, to avoid multiple messageboxes
+        is_active_tab = (self.idx == self.frame.master.index(self.frame)) if hasattr(self.frame.master, 'index') else False
+
+
         try:
             price_str = self.price_entry.get()
             if not price_str:
-                messagebox.showerror("שגיאת קלט", "חובה להזין מחיר דירה.", parent=self.frame)
-                return
+                if is_active_tab:
+                     messagebox.showerror("שגיאת קלט", "חובה להזין מחיר דירה.", parent=self.frame)
+                return False # Indicate that calculation was not fully successful due to missing price
+
             price = float(price_str)
             if price <= 0:
-                messagebox.showerror("שגיאת קלט", "מחיר הדירה חייב להיות מספר חיובי.", parent=self.frame)
-                return
+                if is_active_tab:
+                    messagebox.showerror("שגיאת קלט", "מחיר הדירה חייב להיות מספר חיובי.", parent=self.frame)
+                return False
 
             area_str = self.area_entry.get()
             area = float(area_str) if area_str else None
             if area is not None and area <= 0:
-                messagebox.showerror("שגיאת קלט", "שטח המטר המרובע חייב להיות מספר חיובי.", parent=self.frame)
-                return
+                if is_active_tab:
+                    messagebox.showerror("שגיאת קלט", "שטח המטר המרובע חייב להיות מספר חיובי.", parent=self.frame)
+                return False
 
             ltv_str = self.ltv_entry.get()
             if not ltv_str:
-                messagebox.showerror("שגיאת קלט", "חובה להזין אחוז מימון (LTV).", parent=self.frame)
-                return
+                if is_active_tab:
+                    messagebox.showerror("שגיאת קלט", "חובה להזין אחוז מימון (LTV).", parent=self.frame)
+                return False
             ltv = float(ltv_str)
             if not (0 <= ltv <= 100):
-                messagebox.showerror("שגיאת קלט", "אחוז מימון (LTV) חייב להיות בין 0 ל-100.", parent=self.frame)
-                return
+                if is_active_tab:
+                    messagebox.showerror("שגיאת קלט", "אחוז מימון (LTV) חייב להיות בין 0 ל-100.", parent=self.frame)
+                return False
 
             rent_str = self.rent_entry.get()
             rent = float(rent_str) if rent_str else None
             if rent is not None and rent < 0:
-                messagebox.showerror("שגיאת קלט", "שכירות חודשית צפויה אינה יכולה להיות שלילית.", parent=self.frame)
-                return
+                if is_active_tab:
+                    messagebox.showerror("שגיאת קלט", "שכירות חודשית צפויה אינה יכולה להיות שלילית.", parent=self.frame)
+                return False
 
             rates = []
             years = []
-            valid_scenarios = 0
+            valid_scenarios_count = 0
             for i in range(3):
                 rate_val = self.rate_entries[i].get()
                 years_val = self.years_entries[i].get()
@@ -288,35 +312,42 @@ class PropertyTab:
                     try:
                         current_rate = float(rate_val)
                         if current_rate < 0:
-                            messagebox.showerror("שגיאת קלט", f"ריבית שנתית (תרחיש {i+1}) אינה יכולה להיות שלילית.", parent=self.frame)
-                            return
+                            if is_active_tab:
+                                messagebox.showerror("שגיאת קלט", f"ריבית שנתית (תרחיש {i+1}) אינה יכולה להיות שלילית.", parent=self.frame)
+                            return False
                     except ValueError:
-                        messagebox.showerror("שגיאת קלט", f"ריבית שנתית (תרחיש {i+1}) חייבת להיות מספר.", parent=self.frame)
-                        return
+                        if is_active_tab:
+                            messagebox.showerror("שגיאת קלט", f"ריבית שנתית (תרחיש {i+1}) חייבת להיות מספר.", parent=self.frame)
+                        return False
                     
                     try:
                         current_years = int(years_val)
                         if current_years <= 0:
-                            messagebox.showerror("שגיאת קלט", f"שנים להחזר (תרחיש {i+1}) חייבות להיות מספר חיובי שלם.", parent=self.frame)
-                            return
+                            if is_active_tab:
+                                messagebox.showerror("שגיאת קלט", f"שנים להחזר (תרחיש {i+1}) חייבות להיות מספר חיובי שלם.", parent=self.frame)
+                            return False
                     except ValueError:
-                        messagebox.showerror("שגיאת קלט", f"שנים להחזר (תרחיש {i+1}) חייבות להיות מספר שלם.", parent=self.frame)
-                        return
-                    valid_scenarios += 1
+                        if is_active_tab:
+                            messagebox.showerror("שגיאת קלט", f"שנים להחזר (תרחיש {i+1}) חייבות להיות מספר שלם.", parent=self.frame)
+                        return False
+                    valid_scenarios_count += 1
                 
                 rates.append(current_rate)
                 years.append(current_years)
 
-            if valid_scenarios == 0:
-                messagebox.showwarning("אין נתונים לחישוב", "אנא הזן/י לפחות ריבית שנתית אחת ושנים להחזר עבור תרחיש.", parent=self.frame)
+            if valid_scenarios_count == 0:
+                if is_active_tab:
+                    messagebox.showwarning("אין נתונים לחישוב", "אנא הזן/י לפחות ריבית שנתית אחת ושנים להחזר עבור תרחיש.", parent=self.frame)
                 # Still proceed to show general property costs, just no loan calculations
         
         except ValueError as e:
-            messagebox.showerror("שגיאת קלט", f"שגיאה בנתונים: {e}\nאנא ודא/י שכל השדות המספריים מולאו נכונה.", parent=self.frame)
-            return
+            if is_active_tab:
+                messagebox.showerror("שגיאת קלט", f"שגיאה בנתונים: {e}\nאנא ודא/י שכל השדות המספריים מולאו נכונה.", parent=self.frame)
+            return False
         except Exception as e:
-            messagebox.showerror("שגיאה", f"אירעה שגיאה בלתי צפויה: {e}", parent=self.frame)
-            return
+            if is_active_tab:
+                messagebox.showerror("שגיאה", f"אירעה שגיאה בלתי צפויה: {e}", parent=self.frame)
+            return False
 
         purchase_tax = 0 if self.skip_tax_var.get() else calculate_purchase_tax(price)
         lawyer_fee = estimate_lawyer_fee(price)
@@ -325,6 +356,30 @@ class PropertyTab:
         loan_amount = price * (ltv / 100)
         down_payment = price - loan_amount
         total_needed = down_payment + purchase_tax + lawyer_fee + broker_fee
+
+        # Store calculated results as attributes for easy access in save_to_excel
+        self.calculated_results = {
+            "purchase_tax": purchase_tax,
+            "down_payment": down_payment,
+            "lawyer_fee": lawyer_fee,
+            "broker_fee": broker_fee,
+            "total_needed": total_needed,
+            "price_per_meter": price / area if area is not None and area > 0 else None,
+            "loan_amount": loan_amount,
+            "rent": rent,
+            "input_price": price_str, # Store raw inputs for Excel
+            "input_area": area_str,
+            "input_ltv": ltv_str,
+            "input_rent": rent_str,
+            "input_skip_tax": self.skip_tax_var.get(),
+            "input_skip_broker": self.skip_broker_var.get(),
+            "input_rates": [r for r in rates], # Store actual rates/years for Excel
+            "input_years": [y for y in years],
+            "input_alias": self.alias_entry.get(),
+            "input_link": self.link_entry.get(),
+        }
+        self.loan_scenarios_data = [] # To store data for Excel table summary
+        self.loan_scenarios_rent_comparison = [] # To store rent comparison strings for Excel
 
         self.tax_label.config(text=f"מס רכישה משוער: {purchase_tax:,.0f} ₪")
         self.downpayment_label.config(text=f"הון עצמי נדרש: {down_payment:,.0f} ₪")
@@ -349,27 +404,39 @@ class PropertyTab:
                     total_payment = df["תשלום חודשי"].sum()
                     monthly_payment = df["תשלום חודשי"].iloc[0] # Take first monthly payment as base
 
-                    self.table.insert("", "end", values=(
+                    table_row_data = (
                         f"{loan_amount:,.0f}",
                         f"{rates[i]:.2f}",
                         f"{years[i]}",
                         f"{monthly_payment:,.0f}",
                         f"{total_interest:,.0f}",
                         f"{total_payment:,.0f}",
-                    ))
+                    )
+                    self.table.insert("", "end", values=table_row_data)
+                    self.loan_scenarios_data.append({
+                        "תרחיש": f"תרחיש {i+1}",
+                        "סכום הלוואה (₪)": f"{loan_amount:,.0f}",
+                        "ריבית שנתית (%)": f"{rates[i]:.2f}",
+                        "שנים להחזר": f"{years[i]}",
+                        "תשלום חודשי (₪)": f"{monthly_payment:,.0f}",
+                        "סה\"כ ריבית (₪)": f"{total_interest:,.0f}",
+                        "סה\"כ תשלום כולל (₪)": f"{total_payment:,.0f}"
+                    })
 
+
+                    rent_compare_str = ""
                     if rent is not None: # Only show if rent is provided and valid
                         ratio = rent / monthly_payment if monthly_payment != 0 else 0
-                        self.rent_comparison_labels[i].config(
-                            text=f"שכירות צפויה: {rent:,.0f} ₪ | תשלום חודשי: {monthly_payment:,.0f} ₪ | יחס שכירות/תשלום: {ratio:.2f}")
+                        rent_compare_str = f"שכירות צפויה: {rent:,.0f} ₪ | תשלום חודשי: {monthly_payment:,.0f} ₪ | יחס שכירות/תשלום: {ratio:.2f}"
+                        self.rent_comparison_labels[i].config(text=rent_compare_str)
                     else:
                         self.rent_comparison_labels[i].config(text="") # Clear if rent not provided
+                    self.loan_scenarios_rent_comparison.append(rent_compare_str)
                     
                     ax = self.ax_list[i]
                     ax.clear()
                     ax.plot(df["חודש"], df["קרן"], label="קרן", color="green")
                     ax.plot(df["חודש"], df["ריבית"], label="ריבית", color="red")
-                    # No ax.invert_yaxis()
                     ax.set_title(f"תרחיש {i+1} - פירוט תשלומים חודשיים", fontsize=9)
                     ax.set_xlabel("חודש", fontsize=8)
                     ax.set_ylabel("₪", fontsize=8)
@@ -385,12 +452,18 @@ class PropertyTab:
                     self.rent_comparison_labels[i].config(text="")
                     self.ax_list[i].clear()
                     self.canvas_list[i].draw()
+                    self.loan_scenarios_data.append({}) # Append empty dict for this scenario
+                    self.loan_scenarios_rent_comparison.append("אין נתוני השוואת שכירות עבור תרחיש זה")
             else:
                 self.df_list[i] = None
                 self.table.insert("", "end", values=("אין נתונים עבור תרחיש זה (חסר ריבית/שנים)",) * 6)
                 self.rent_comparison_labels[i].config(text="")
                 self.ax_list[i].clear()
                 self.canvas_list[i].draw()
+                self.loan_scenarios_data.append({}) # Append empty dict for this scenario
+                self.loan_scenarios_rent_comparison.append("אין נתוני השוואת שכירות עבור תרחיש זה")
+        
+        return True # Indicate successful calculation
 
 
 class MortgageApp:
@@ -463,8 +536,8 @@ class MortgageApp:
         self.calc_button = ttk.Button(btn_frame, text="חשב עבור כל הנכסים", command=self.calculate_all)
         self.calc_button.grid(row=0, column=3, padx=5, pady=5) # Column 3 (Center)
 
-        self.save_payments_button = ttk.Button(btn_frame, text="שמור טבלאות תשלום ל-CSV", command=self.save_payments)
-        self.save_payments_button.grid(row=0, column=4, padx=5, pady=5) # Column 4
+        self.save_excel_button = ttk.Button(btn_frame, text="שמור נתונים ל-Excel", command=self.save_to_excel)
+        self.save_excel_button.grid(row=0, column=4, padx=5, pady=5) # Column 4
         
     def _on_inner_frame_configure(self, event=None):
         # Update canvas scroll region when the inner_frame's size changes
@@ -491,8 +564,11 @@ class MortgageApp:
 
 
     def calculate_all(self):
+        # This function should call calculate on each tab without showing multiple popups
         for tab in self.tabs:
             tab.calculate()
+        messagebox.showinfo("חישוב הושלם", "החישובים עבור כל הנכסים הושלמו.", parent=self.root)
+
 
     def save_inputs(self):
         file_path = filedialog.asksaveasfilename(
@@ -557,7 +633,7 @@ class MortgageApp:
                 set_entry_value(tab.link_entry, row.get("Link", ""))
                 set_entry_value(tab.price_entry, row.get("Price", ""))
                 set_entry_value(tab.area_entry, row.get("Area", ""))
-                set_entry_value(tab.ltv_entry, row.get("LTV", "50"))
+                set_entry_value(tab.ltv_entry, row.get("LTV", "70"))
                 set_entry_value(tab.rent_entry, row.get("Rent", ""))
                 
                 # Handle booleans carefully, accounting for string "True"/"False" from CSV
@@ -579,42 +655,108 @@ class MortgageApp:
         except Exception as e:
             messagebox.showerror("שגיאה בטעינה", f"אירעה שגיאה בעת טעינת הנתונים: {e}", parent=self.root)
 
-    def save_payments(self):
+    def save_to_excel(self):
         file_path = filedialog.asksaveasfilename(
-            defaultextension=".csv",
-            filetypes=[("CSV files", "*.csv")],
-            title="שמור טבלאות תשלום"
+            defaultextension=".xlsx",
+            filetypes=[("Excel files", "*.xlsx")],
+            title="שמור נתוני נכסים ל-Excel"
         )
         if not file_path:
             return
-        try:
-            with open(file_path, "w", encoding="utf-8-sig") as f:
-                for i, tab in enumerate(self.tabs):
-                    alias = tab.alias_entry.get()
-                    f.write(f"### נכס {i+1} - Alias: {alias if alias else 'ללא כינוי'} ###\n")
-                    
-                    has_data_in_any_scenario = False
-                    for df in tab.df_list:
-                        if df is not None and not df.empty:
-                            has_data_in_any_scenario = True
-                            break
 
-                    if has_data_in_any_scenario:
-                        for j, df in enumerate(tab.df_list):
-                            if df is not None and not df.empty:
-                                rate_val = tab.rate_entries[j].get()
-                                years_val = tab.years_entries[j].get()
-                                f.write(f"--- תרחיש {j+1} (ריבית: {rate_val if rate_val else 'N/A'}%, שנים: {years_val if years_val else 'N/A'}) ---\n")
-                                df.to_csv(f, index=False, encoding="utf-8-sig")
-                                f.write("\n")
-                            else:
-                                f.write(f"--- תרחיש {j+1}: אין נתוני תשלום זמינים (חסר ריבית/שנים) ---\n\n")
-                    else:
-                        f.write("אין נתוני תשלום עבור נכס זה (לא בוצע חישוב או חסרים נתונים). \n\n")
-                    f.write("\n\n") # Add extra separation between properties
-            messagebox.showinfo("הצלחה", "טבלאות התשלום נשמרו בהצלחה.", parent=self.root)
+        try:
+            with pd.ExcelWriter(file_path, engine='openpyxl') as writer:
+                for i, tab in enumerate(self.tabs):
+                    # Always try to calculate the tab to ensure data is fresh
+                    # The calculate method now returns False if essential inputs are missing/invalid
+                    calculation_successful = tab.calculate() 
+
+                    alias = tab.alias_entry.get()
+                    sheet_name = alias if alias else f"נכס {i+1}"
+                    # Sanitize sheet name as Excel sheet names have limits
+                    sheet_name = sheet_name[:30].replace("/", "_").replace("\\", "_").replace("?", "_").replace("*", "_").replace("[", "_").replace("]", "_").replace(":", "_")
+                    
+                    if not calculation_successful or not tab.calculated_results:
+                        # Create an empty sheet or a sheet with a message if calculation failed
+                        dummy_df = pd.DataFrame([{"הערה": "אין נתונים לחישוב עבור נכס זה או שחסרים קלטים חיוניים."}])
+                        dummy_df.to_excel(writer, sheet_name=sheet_name, index=False)
+                        continue # Skip to the next tab if calculation failed
+
+                    # --- Write Inputs and Summary Results ---
+                    inputs_summary_data = {
+                        "פרט": ["כינוי", "לינק", "מחיר דירה", "מטר מרובע", "אחוז מימון (LTV)", "שכירות חודשית צפויה", "בטל מס רכישה", "בטל עלות מתווך",
+                                "מס רכישה משוער", "הון עצמי נדרש", "עלות עו\"ד משוערת", "עלות מתווך משוערת", "סה\"כ הון דרוש", "מחיר למטר מרובע", "סכום הלוואה"],
+                        "ערך": [
+                            tab.calculated_results.get("input_alias", ""),
+                            tab.calculated_results.get("input_link", ""),
+                            f"{float(tab.calculated_results['input_price']):,.0f} ₪" if tab.calculated_results.get("input_price") else "",
+                            f"{float(tab.calculated_results['input_area']):,.0f}" if tab.calculated_results.get("input_area") else "",
+                            f"{float(tab.calculated_results['input_ltv']):.0f}%" if tab.calculated_results.get("input_ltv") else "",
+                            f"{float(tab.calculated_results['input_rent']):,.0f} ₪" if tab.calculated_results.get("input_rent") else "",
+                            "כן" if tab.calculated_results.get("input_skip_tax", False) else "לא",
+                            "כן" if tab.calculated_results.get("input_skip_broker", False) else "לא",
+                            f"{tab.calculated_results['purchase_tax']:,.0f} ₪",
+                            f"{tab.calculated_results['down_payment']:,.0f} ₪",
+                            f"{tab.calculated_results['lawyer_fee']:,.0f} ₪",
+                            f"{tab.calculated_results['broker_fee']:,.0f} ₪",
+                            f"{tab.calculated_results['total_needed']:,.0f} ₪",
+                            f"{tab.calculated_results['price_per_meter']:,.2f} ₪" if tab.calculated_results['price_per_meter'] is not None else "N/A",
+                            f"{tab.calculated_results['loan_amount']:,.0f} ₪"
+                        ]
+                    }
+                    inputs_summary_df = pd.DataFrame(inputs_summary_data)
+                    
+                    # Write inputs and summary to Excel
+                    inputs_summary_df.to_excel(writer, sheet_name=sheet_name, index=False, startrow=0, startcol=0)
+                    
+                    # Get the worksheet object to write images
+                    worksheet = writer.sheets[sheet_name]
+                    
+                    # Start row for loan scenarios
+                    current_row = inputs_summary_df.shape[0] + 3 # Adjust position after inputs/summary
+
+                    # --- Write All Loan Scenarios ---
+                    for j in range(3):
+                        scenario_alias = f"תרחיש {j+1}"
+                        
+                        rate_val = tab.calculated_results["input_rates"][j] if j < len(tab.calculated_results["input_rates"]) else None
+                        years_val = tab.calculated_results["input_years"][j] if j < len(tab.calculated_results["input_years"]) else None
+
+                        worksheet.cell(row=current_row + 1, column=1, value=f"--- {scenario_alias} (ריבית: {rate_val if rate_val is not None else 'N/A'}%, שנים: {years_val if years_val is not None else 'N/A'}) ---")
+                        current_row += 2 # Move past the header
+                        
+                        if tab.df_list[j] is not None and not tab.df_list[j].empty:
+                            tab.df_list[j].to_excel(writer, sheet_name=sheet_name, index=False, startrow=current_row, startcol=0)
+                            current_row += tab.df_list[j].shape[0] + 2 # Move past the table and add a gap
+
+                            # Add the rent comparison string
+                            if j < len(tab.loan_scenarios_rent_comparison):
+                                worksheet.cell(row=current_row, column=1, value=tab.loan_scenarios_rent_comparison[j])
+                            current_row += 2 # Move past rent comparison string
+
+                            # Save and embed the graph
+                            fig = tab.figure_list[j]
+                            buf = io.BytesIO()
+                            fig.savefig(buf, format='png', bbox_inches='tight') # Save to buffer
+                            buf.seek(0)
+                            
+                            img = Image.open(buf)
+                            image_path = io.BytesIO()
+                            img.save(image_path, format='png')
+                            image_path.seek(0) # Rewind to start of buffer for reading
+
+                            worksheet.add_image(openpyxl.drawing.image.Image(image_path), f'A{current_row}')
+                            # Estimate rows needed for image based on its height/dpi. Adjust multiplier if needed.
+                            # Standard row height is about 15 pixels. Image height in pixels / 15.
+                            current_row += int(fig.get_figheight() * fig.dpi / 15) + 2
+                            
+                        else:
+                            worksheet.cell(row=current_row + 1, column=1, value=f"אין נתוני תשלום זמינים עבור תרחיש זה (חסר ריבית/שנים).")
+                            current_row += 3 # Just a gap for empty scenarios
+
+            messagebox.showinfo("הצלחה", f"כל נתוני הנכסים נשמרו בהצלחה ל-Excel:\n{file_path}", parent=self.root)
         except Exception as e:
-            messagebox.showerror("שגיאה בשמירה", str(e), parent=self.root)
+            messagebox.showerror("שגיאה בשמירה", f"אירעה שגיאה בעת שמירה ל-Excel: {e}", parent=self.root)
 
 
 if __name__ == "__main__":
