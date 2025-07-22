@@ -15,11 +15,8 @@ def calculate_purchase_tax(price):
     # Tax brackets and rates for purchase tax (assuming Israeli tax law for example)
     # This function's logic was confirmed to be correct for progressive tax calculation.
     brackets = [
-        (0, 545000, 8),
-        (545000, 1362000, 10),
-        (1362000, 1890000, 12),
-        (1890000, 4890000, 14),
-        (4890000, float('inf'), 16),
+        (0, 6055070, 8),
+        (6055070, float('inf'), 10),
     ]
     tax = 0
     remaining_price = price
