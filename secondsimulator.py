@@ -138,6 +138,14 @@ class PropertyTab:
         self.tax_checkbox.grid(row=r, column=0, sticky="w", padx=padx, pady=pady)
         r += 1
 
+        # New: Checkbox to include tax in mortgage
+        self.include_tax_in_mortgage_var = tk.BooleanVar()
+        self.include_tax_in_mortgage_checkbox = ttk.Checkbutton(self.input_frame, 
+                                                                text="כלול מס רכישה במשכנתא", 
+                                                                variable=self.include_tax_in_mortgage_var)
+        self.include_tax_in_mortgage_checkbox.grid(row=r, column=0, sticky="w", padx=padx, pady=pady)
+        r += 1
+
         self.manual_lawyer_fee_var = tk.BooleanVar()
         self.manual_lawyer_fee_checkbox = ttk.Checkbutton(self.input_frame, text="הזן עלות עו\"ד ידנית", variable=self.manual_lawyer_fee_var, command=self._toggle_lawyer_fee_entry)
         self.manual_lawyer_fee_checkbox.grid(row=r, column=0, sticky="w", padx=padx, pady=pady)
@@ -386,7 +394,11 @@ class PropertyTab:
                     else:
                         current_broker_fee = estimated_price * BROKER_FEE_RATE
 
-                    current_total_funds_needed_for_estimated_price = current_down_payment + current_purchase_tax + current_lawyer_fee + current_broker_fee
+                    # Calculate total funds needed based on whether tax is included in mortgage
+                    if self.include_tax_in_mortgage_var.get():
+                        current_total_funds_needed_for_estimated_price = current_down_payment + current_lawyer_fee + current_broker_fee
+                    else:
+                        current_total_funds_needed_for_estimated_price = current_down_payment + current_purchase_tax + current_lawyer_fee + current_broker_fee
 
                     diff = available_funds - current_total_funds_needed_for_estimated_price
 
@@ -455,10 +467,16 @@ class PropertyTab:
             else:
                 broker_fee = estimate_broker_fee(price)
 
+            # Recalculate loan_amount and down_payment based on the new checkbox
+            base_loan_amount = price * (ltv / 100)
+            if self.include_tax_in_mortgage_var.get():
+                loan_amount = base_loan_amount + purchase_tax
+                down_payment = price - base_loan_amount 
+            else:
+                loan_amount = base_loan_amount
+                down_payment = (price - base_loan_amount) + purchase_tax
 
-            loan_amount = price * (ltv / 100)
-            down_payment = price - loan_amount
-            total_needed = down_payment + purchase_tax + lawyer_fee + broker_fee
+            total_needed = down_payment + lawyer_fee + broker_fee
 
             # If calculating affordability, make sure the final total_needed matches available_funds for display consistency
             if self.calculate_affordability_var.get():
@@ -479,6 +497,7 @@ class PropertyTab:
                 "input_ltv": ltv_str,
                 "input_rent": rent_str,
                 "input_skip_tax": self.skip_tax_var.get(),
+                "input_include_tax_in_mortgage": self.include_tax_in_mortgage_var.get(), # Save the state of the new checkbox
                 "input_skip_broker": self.skip_broker_var.get(),
                 "input_manual_lawyer_fee": self.manual_lawyer_fee_var.get(), 
                 "input_lawyer_fee_manual_value": self.lawyer_fee_manual_entry.get(),
@@ -668,294 +687,239 @@ class MortgageApp:
         self.root.bind("<Configure>", self._on_root_resize)
 
         self.notebook = ttk.Notebook(self.inner_frame)
-        self.notebook.pack(fill="x", expand=True, padx=10, pady=10) 
+        self.notebook.pack(fill="x", expand=True, padx=10, pady=10)
 
         self.tabs = []
-        for i in range(3):
-            tab = PropertyTab(self.notebook, i)
-            self.tabs.append(tab)
-            self.notebook.add(tab.frame, text=f"נכס {i+1}")
+        self.add_tab() # Start with one tab
 
-        btn_frame = ttk.Frame(self.inner_frame)
-        btn_frame.pack(fill="x", pady=10) 
+        self._create_menu()
 
-        btn_frame.grid_columnconfigure(0, weight=1) 
-        btn_frame.grid_columnconfigure(1, weight=0) 
-        btn_frame.grid_columnconfigure(2, weight=0) 
-        btn_frame.grid_columnconfigure(3, weight=0) 
-        btn_frame.grid_columnconfigure(4, weight=0) 
-        btn_frame.grid_columnconfigure(5, weight=0) 
-        btn_frame.grid_columnconfigure(6, weight=1) 
+    def _create_menu(self):
+        menubar = tk.Menu(self.root)
+        self.root.config(menu=menubar)
 
-        self.save_inputs_button = ttk.Button(btn_frame, text="שמור Inputs ל-CSV", command=self.save_inputs)
-        self.save_inputs_button.grid(row=0, column=1, padx=5, pady=5) 
+        file_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="קובץ", menu=file_menu)
+        file_menu.add_command(label="הוסף נכס חדש", command=self.add_tab)
+        file_menu.add_command(label="שמור נכסים ל-Excel", command=self.save_all_tabs_to_excel)
+        file_menu.add_command(label="טען נכסים מ-Excel", command=self.load_tabs_from_excel)
+        file_menu.add_separator()
+        file_menu.add_command(label="יציאה", command=self.root.quit)
 
-        self.load_inputs_button = ttk.Button(btn_frame, text="טען Inputs מ-CSV", command=self.load_inputs)
-        self.load_inputs_button.grid(row=0, column=2, padx=5, pady=5) 
+        help_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="עזרה", menu=help_menu)
+        help_menu.add_command(label="אודות", command=self._show_about)
 
-        self.calc_button = ttk.Button(btn_frame, text="חשב עבור כל הנכסים", command=self.calculate_all)
-        self.calc_button.grid(row=0, column=3, padx=5, pady=5) 
+    def _show_about(self):
+        messagebox.showinfo("אודות", "מחשבון משכנתא - השוואת נכסים\nגרסה 1.0\nנוצר על ידי [שם המפתח/חברה]", parent=self.root)
 
-        self.save_excel_button = ttk.Button(btn_frame, text="שמור נתונים ל-Excel", command=self.save_to_excel)
-        self.save_excel_button.grid(row=0, column=4, padx=5, pady=5) 
-        
-    def _on_inner_frame_configure(self, event=None):
+    def _on_inner_frame_configure(self, event):
+        # Update the scrollregion of the canvas when the inner frame changes size
         self.canvas.configure(scrollregion=self.canvas.bbox("all"))
-        self._center_inner_frame() 
-
-    def _on_root_resize(self, event=None):
-        self.canvas.update_idletasks() 
-        self.canvas.config(scrollregion=self.canvas.bbox("all"))
         self._center_inner_frame()
 
     def _center_inner_frame(self, event=None):
+        # Center the inner_frame horizontally within the canvas
+        if self.inner_frame.winfo_width() == 0 or self.canvas.winfo_width() == 0:
+            return
         canvas_width = self.canvas.winfo_width()
-        inner_frame_width = self.inner_frame.winfo_reqwidth() 
+        frame_width = self.inner_frame.winfo_width()
         
-        if inner_frame_width > canvas_width:
-            self.canvas.coords(self.canvas_window_id, 0, 0) 
+        if frame_width < canvas_width:
+            x_offset = (canvas_width - frame_width) // 2
+            self.canvas.coords(self.canvas_window_id, x_offset, 0)
         else:
-            x_offset = (canvas_width - inner_frame_width) / 2
-            self.canvas.coords(self.canvas_window_id, x_offset, 0) 
+            self.canvas.coords(self.canvas_window_id, 0, 0)
 
+    def _on_root_resize(self, event):
+        # When the root window resizes, also re-center the inner frame
+        self._center_inner_frame()
 
-    def calculate_all(self):
-        for tab in self.tabs:
-            tab.calculate()
-        messagebox.showinfo("חישוב הושלם", "החישובים עבור כל הנכסים הושלמו.", parent=self.root)
+    def add_tab(self):
+        tab_id = len(self.tabs) + 1
+        new_tab = PropertyTab(self.notebook, tab_id)
+        self.tabs.append(new_tab)
+        self.notebook.add(new_tab.frame, text=f"נכס {tab_id}")
+        self.notebook.select(new_tab.frame)
 
-
-    def save_inputs(self):
-        file_path = filedialog.asksaveasfilename(
-            defaultextension=".csv",
-            filetypes=[("CSV files", "*.csv")],
-            title="שמור קובץ Inputs"
-        )
+    def save_all_tabs_to_excel(self):
+        file_path = filedialog.asksaveasfilename(defaultextension=".xlsx", 
+                                                filetypes=[("Excel files", "*.xlsx"), ("All files", "*.*")])
         if not file_path:
             return
+
+        all_data = []
+        for tab_index, tab in enumerate(self.tabs):
+            tab_name = tab.alias_entry.get() if tab.alias_entry.get() else f"נכס {tab.idx}"
+            
+            # Ensure calculations are up-to-date before saving
+            # This will also populate tab.calculated_results and tab.loan_scenarios_data
+            tab.calculate() 
+
+            tab_info = {
+                "טאב": tab_name,
+                "מספר טאב": tab.idx,
+                "Alias": tab.alias_entry.get(),
+                "Link": tab.link_entry.get(),
+                "מחיר דירה (קלט)": tab.calculated_results.get("input_price"),
+                "מחיר דירה (מחושב)": tab.calculated_results.get("calculated_price"),
+                "מטר מרובע": tab.calculated_results.get("input_area"),
+                "אחוז מימון (LTV)": tab.calculated_results.get("input_ltv"),
+                "שכירות חודשית צפויה": tab.calculated_results.get("input_rent"),
+                "בטל מס רכישה": tab.calculated_results.get("input_skip_tax"),
+                "כלול מס רכישה במשכנתא": tab.calculated_results.get("input_include_tax_in_mortgage"), # Save this state
+                "הזן עו\"ד ידנית": tab.calculated_results.get("input_manual_lawyer_fee"),
+                "עלות עו\"ד ידנית": tab.calculated_results.get("input_lawyer_fee_manual_value"),
+                "בטל עלות מתווך": tab.calculated_results.get("input_skip_broker"),
+                "הזן מתווך ידנית": tab.calculated_results.get("input_manual_broker_fee"),
+                "עלות מתווך ידנית": tab.calculated_results.get("input_broker_fee_manual_value"),
+                "חשב מחיר לפי הון עצמי": tab.calculated_results.get("input_calculate_affordability"),
+                "הון עצמי זמין": tab.calculated_results.get("input_available_funds"),
+                "מס רכישה משוער": f"{tab.calculated_results.get('purchase_tax', 0):,.0f}",
+                "הון עצמי נדרש": f"{tab.calculated_results.get('down_payment', 0):,.0f}",
+                "סכום הלוואה מהבנק": f"{tab.calculated_results.get('loan_amount', 0):,.0f}",
+                "עלות עורך דין משוערת": f"{tab.calculated_results.get('lawyer_fee', 0):,.0f}",
+                "עלות מתווך משוערת": f"{tab.calculated_results.get('broker_fee', 0):,.0f}",
+                "סה\"כ הון דרוש": f"{tab.calculated_results.get('total_needed', 0):,.0f}",
+                "מחיר למטר מרובע": f"{tab.calculated_results.get('price_per_meter', 0):,.2f}" if tab.calculated_results.get('price_per_meter') is not None else "",
+            }
+            all_data.append(tab_info)
+
+            # Add loan scenarios data
+            for i, scenario in enumerate(tab.loan_scenarios_data):
+                if scenario: # Only add if scenario data exists
+                    scenario_prefix = f"תרחיש {i+1} "
+                    scenario_details = {scenario_prefix + k: v for k, v in scenario.items()}
+                    tab_info.update(scenario_details)
+                    tab_info[f"תרחיש {i+1} השוואת שכירות"] = tab.loan_scenarios_rent_comparison[i]
+            
+            # Add amortization dataframes as separate sheets or within the same sheet in a structured way
+            for i, df in enumerate(tab.df_list):
+                if df is not None and not df.empty:
+                    # Option 1: Convert DataFrame to a string and store in the main sheet (less ideal for large DFs)
+                    # tab_info[f"Amortization Scenario {i+1}"] = df.to_string(index=False)
+                    
+                    # Option 2: Store DFs separately to be written to separate sheets later
+                    # For now, we'll collect them to write after the main summary
+                    pass # We'll handle this outside the initial `tab_info` loop
+
+        if not all_data:
+            messagebox.showinfo("שמירת נתונים", "אין נתונים לשמירה.", parent=self.root)
+            return
+
         try:
-            data = []
-            for tab in self.tabs:
-                d = {
-                    "Alias": tab.alias_entry.get(),
-                    "Link": tab.link_entry.get(),
-                    "Price": tab.price_entry.get(),
-                    "Area": tab.area_entry.get(),
-                    "LTV": tab.ltv_entry.get(),
-                    "Rent": tab.rent_entry.get(),
-                    "SkipTax": tab.skip_tax_var.get(),
-                    "ManualLawyerFee": tab.manual_lawyer_fee_var.get(), 
-                    "LawyerFeeManualValue": tab.lawyer_fee_manual_entry.get(), 
-                    "ManualBrokerFee": tab.manual_broker_fee_var.get(), 
-                    "BrokerFeeManualValue": tab.broker_fee_manual_entry.get(), 
-                    "SkipBroker": tab.skip_broker_var.get(),
-                    "CalculateAffordability": tab.calculate_affordability_var.get(),
-                    "AvailableFunds": tab.available_funds_entry.get(),
-                }
-                for i in range(3):
-                    d[f"Rate{i+1}"] = tab.rate_entries[i].get()
-                    d[f"Years{i+1}"] = tab.years_entries[i].get()
-                data.append(d)
-            df = pd.DataFrame(data)
-            df.to_csv(file_path, index=False, encoding="utf-8-sig")
-            messagebox.showinfo("הצלחה", "הנתונים נשמרו בהצלחה.", parent=self.root)
+            writer = pd.ExcelWriter(file_path, engine='openpyxl')
+            
+            # Create a DataFrame for the summary of all tabs
+            summary_df = pd.DataFrame(all_data)
+            summary_df.to_excel(writer, sheet_name='Summary', index=False)
+
+            # Write each amortization schedule to a separate sheet
+            for tab_index, tab in enumerate(self.tabs):
+                for i, df in enumerate(tab.df_list):
+                    if df is not None and not df.empty:
+                        sheet_name = f"נכס {tab.idx} תרחיש {i+1}"
+                        # Ensure sheet name is not too long
+                        if len(sheet_name) > 31:
+                            sheet_name = sheet_name[:31] 
+                        df.to_excel(writer, sheet_name=sheet_name, index=False)
+            
+            writer.close()
+            messagebox.showinfo("שמירת נתונים", f"הנתונים נשמרו בהצלחה ל:\n{file_path}", parent=self.root)
         except Exception as e:
-            messagebox.showerror("שגיאה בשמירה", str(e), parent=self.root)
+            messagebox.showerror("שגיאה בשמירה", f"אירעה שגיאה בעת שמירת הנתונים: {e}", parent=self.root)
 
-    def load_inputs(self):
-        file_path = filedialog.askopenfilename(
-            filetypes=[("CSV files", "*.csv")],
-            title="טען קובץ Inputs"
-        )
+    def load_tabs_from_excel(self):
+        file_path = filedialog.askopenfilename(filetypes=[("Excel files", "*.xlsx"), ("All files", "*.*")])
         if not file_path:
             return
+
         try:
-            df = pd.read_csv(file_path, encoding="utf-8-sig")
-            for i, tab in enumerate(self.tabs):
-                if i >= len(df):
-                    break 
-                row = df.iloc[i]
+            xls = pd.ExcelFile(file_path)
+            summary_df = pd.read_excel(xls, sheet_name='Summary')
+
+            # Clear existing tabs
+            for tab_item in self.notebook.tabs():
+                self.notebook.forget(tab_item)
+            self.tabs = []
+
+            for index, row in summary_df.iterrows():
+                self.add_tab() # Add a new tab for each row in the summary
+                current_tab = self.tabs[-1] # Get the newly created tab
+
+                # Populate fields based on loaded data
+                current_tab.alias_entry.delete(0, tk.END)
+                current_tab.alias_entry.insert(0, str(row.get("Alias", "")))
                 
-                def set_entry_value(entry_widget, value):
-                    entry_widget.delete(0, tk.END) 
-                    if pd.isna(value): 
-                        pass
-                    elif isinstance(value, (float, int)):
-                        if float(value) == int(float(value)): 
-                            entry_widget.insert(0, str(int(float(value))))
-                        else:
-                            entry_widget.insert(0, str(value))
-                    else:
-                        entry_widget.insert(0, str(value))
+                current_tab.link_entry.delete(0, tk.END)
+                current_tab.link_entry.insert(0, str(row.get("Link", "")))
 
-                set_entry_value(tab.alias_entry, row.get("Alias", ""))
-                set_entry_value(tab.link_entry, row.get("Link", ""))
-                set_entry_value(tab.price_entry, row.get("Price", ""))
-                set_entry_value(tab.area_entry, row.get("Area", ""))
-                set_entry_value(tab.ltv_entry, row.get("LTV", "70"))
-                set_entry_value(tab.rent_entry, row.get("Rent", ""))
+                # Handle calculated price vs input price
+                if row.get("חשב מחיר לפי הון עצמי", False):
+                    current_tab.calculate_affordability_var.set(True)
+                    current_tab._toggle_affordability_calculation() # Enable/disable entries
+                    current_tab.available_funds_entry.delete(0, tk.END)
+                    current_tab.available_funds_entry.insert(0, str(row.get("הון עצמי זמין", "")))
+                    # The price_entry will be populated by calculate() based on affordability
+                else:
+                    current_tab.calculate_affordability_var.set(False)
+                    current_tab._toggle_affordability_calculation() # Enable/disable entries
+                    current_tab.price_entry.delete(0, tk.END)
+                    current_tab.price_entry.insert(0, str(row.get("מחיר דירה (קלט)", "")))
+
+                current_tab.area_entry.delete(0, tk.END)
+                current_tab.area_entry.insert(0, str(row.get("מטר מרובע", "")))
+
+                current_tab.ltv_entry.delete(0, tk.END)
+                current_tab.ltv_entry.insert(0, str(row.get("אחוז מימון (LTV)", "")))
+
+                current_tab.rent_entry.delete(0, tk.END)
+                current_tab.rent_entry.insert(0, str(row.get("שכירות חודשית צפויה", "")))
+
+                current_tab.skip_tax_var.set(bool(row.get("בטל מס רכישה", False)))
+                current_tab.include_tax_in_mortgage_var.set(bool(row.get("כלול מס רכישה במשכנתא", False))) # Load this state
+
+                manual_lawyer = bool(row.get("הזן עו\"ד ידנית", False))
+                current_tab.manual_lawyer_fee_var.set(manual_lawyer)
+                current_tab._toggle_lawyer_fee_entry() # Adjust entry state
+                if manual_lawyer:
+                    current_tab.lawyer_fee_manual_entry.delete(0, tk.END)
+                    current_tab.lawyer_fee_manual_entry.insert(0, str(row.get("עלות עו\"ד ידנית", "")))
+
+                manual_broker = bool(row.get("הזן מתווך ידנית", False))
+                current_tab.manual_broker_fee_var.set(manual_broker)
+                current_tab._toggle_broker_fee_entry() # Adjust entry state
+                if manual_broker:
+                    current_tab.broker_fee_manual_entry.delete(0, tk.END)
+                    current_tab.broker_fee_manual_entry.insert(0, str(row.get("עלות מתווך ידנית", "")))
+                current_tab.skip_broker_var.set(bool(row.get("בטל עלות מתווך", False)))
+
+
+                for i in range(3):
+                    rate_col = f"תרחיש {i+1} ריבית שנתית (%)"
+                    years_col = f"תרחיש {i+1} שנים להחזר"
+                    
+                    rate_val = str(row.get(rate_col, "")).replace(',', '') # Remove commas for float conversion
+                    years_val = str(row.get(years_col, "")).replace(',', '')
+
+                    current_tab.rate_entries[i].delete(0, tk.END)
+                    current_tab.rate_entries[i].insert(0, rate_val)
+                    
+                    current_tab.years_entries[i].delete(0, tk.END)
+                    current_tab.years_entries[i].insert(0, years_val)
                 
-                tab.skip_tax_var.set(str(row.get("SkipTax", False)).lower() == "true")
+                # After loading all input, trigger calculation to display results
+                current_tab.calculate()
                 
-                manual_lawyer = str(row.get("ManualLawyerFee", False)).lower() == "true"
-                tab.manual_lawyer_fee_var.set(manual_lawyer)
-                set_entry_value(tab.lawyer_fee_manual_entry, row.get("LawyerFeeManualValue", ""))
-                tab._toggle_lawyer_fee_entry() 
+            messagebox.showinfo("טעינת נתונים", "הנתונים נטענו בהצלחה.", parent=self.root)
 
-                manual_broker = str(row.get("ManualBrokerFee", False)).lower() == "true"
-                tab.manual_broker_fee_var.set(manual_broker)
-                set_entry_value(tab.broker_fee_manual_entry, row.get("BrokerFeeManualValue", ""))
-                tab._toggle_broker_fee_entry() 
-
-                tab.skip_broker_var.set(str(row.get("SkipBroker", False)).lower() == "true")
-                if manual_broker: 
-                    tab.skip_broker_var.set(False)
-
-                calc_affordability = str(row.get("CalculateAffordability", False)).lower() == "true"
-                tab.calculate_affordability_var.set(calc_affordability)
-                set_entry_value(tab.available_funds_entry, row.get("AvailableFunds", ""))
-                tab._toggle_affordability_calculation() # Call this to set the state of price_entry
-
-                for j in range(3):
-                    set_entry_value(tab.rate_entries[j], row.get(f"Rate{j+1}", ""))
-                    set_entry_value(tab.years_entries[j], row.get(f"Years{j+1}", ""))
-                
-                # After loading values into entries, call calculate
-                tab.calculate() 
-            messagebox.showinfo("הצלחה", "הנתונים נטענו והתעדכנו בהצלחה.", parent=self.root)
         except FileNotFoundError:
-            messagebox.showwarning("קובץ לא נמצא", "הקובץ שנבחר לא נמצא.", parent=self.root)
-        except pd.errors.EmptyDataError:
-            messagebox.showerror("שגיאה בטעינה", "הקובT שנבחר ריק.", parent=self.root)
+            messagebox.showerror("שגיאת קובץ", "הקובץ לא נמצא.", parent=self.root)
+        except KeyError as e:
+            messagebox.showerror("שגיאת פורמט", f"קובץ Excel אינו בפורמט צפוי. חסרה עמודה: {e}", parent=self.root)
         except Exception as e:
             messagebox.showerror("שגיאה בטעינה", f"אירעה שגיאה בעת טעינת הנתונים: {e}", parent=self.root)
 
-    def save_to_excel(self):
-        file_path = filedialog.asksaveasfilename(
-            defaultextension=".xlsx",
-            filetypes=[("Excel files", "*.xlsx")],
-            title="שמור נתוני נכסים ל-Excel"
-        )
-        if not file_path:
-            return
-
-        try:
-            with pd.ExcelWriter(file_path, engine='openpyxl') as writer:
-                for i, tab in enumerate(self.tabs):
-                    calculation_successful = tab.calculate() 
-
-                    alias = tab.alias_entry.get()
-                    sheet_name = alias if alias else f"נכס {i+1}"
-                    # Sanitize sheet name as Excel sheet names have restrictions
-                    sheet_name = sheet_name[:30].replace("/", "_").replace("\\", "_").replace("?", "_").replace("*", "_").replace("[", "_").replace("]", "_").replace(":", "_")
-                    
-                    if calculation_successful and tab.calculated_results:
-                        
-                        property_info_data = {
-                            "מאפיין": [
-                                "כינוי", "לינק", "מחיר דירה (₪)", "מטר מרובע (שטח)",
-                                "אחוז מימון (LTV) %", "שכירות חודשית צפויה (₪)",
-                                "בטל מס רכישה", 
-                                "הזן עלות עו\"ד ידנית", "עלות עו\"ד ידנית (₪)", 
-                                "הזן עלות מתווך ידנית", "עלות מתווך ידנית (₪)", 
-                                "בטל עלות מתווך",
-                                "חשב מחיר נכס לפי הון עצמי", "הון עצמי פנוי (₪)"
-                            ],
-                            "ערך": [
-                                tab.calculated_results.get("input_alias", ""),
-                                tab.calculated_results.get("input_link", ""),
-                                # Use calculated price if affordability is on, else original input price
-                                f"{tab.calculated_results.get('calculated_price', '') if tab.calculated_results.get('input_calculate_affordability') else tab.calculated_results.get('input_price', '')}",
-                                tab.calculated_results.get("input_area", ""),
-                                tab.calculated_results.get("input_ltv", ""),
-                                tab.calculated_results.get("input_rent", ""),
-                                "כן" if tab.calculated_results.get("input_skip_tax", False) else "לא",
-                                "כן" if tab.calculated_results.get("input_manual_lawyer_fee", False) else "לא", 
-                                tab.calculated_results.get("input_lawyer_fee_manual_value", ""), 
-                                "כן" if tab.calculated_results.get("input_manual_broker_fee", False) else "לא", 
-                                tab.calculated_results.get("input_broker_fee_manual_value", ""), 
-                                "כן" if tab.calculated_results.get("input_skip_broker", False) else "לא",
-                                "כן" if tab.calculated_results.get("input_calculate_affordability", False) else "לא",
-                                tab.calculated_results.get("input_available_funds", ""),
-                            ]
-                        }
-                        property_info_df = pd.DataFrame(property_info_data)
-                        property_info_df.to_excel(writer, sheet_name=sheet_name, startrow=0, startcol=0, index=False)
-
-                        start_row = len(property_info_df) + 2 
-
-                        key_financials_data = {
-                            "מאפיין": [
-                                "מס רכישה משוער (₪)",
-                                "הון עצמי נדרש (₪)",
-                                "סכום הלוואה מהבנק (₪)",
-                                "עלות עורך דין משוערת (₪)",
-                                "עלות מתווך משוערת (₪)",
-                                "סה\"כ הון דרוש (₪)",
-                                "מחיר למטר מרובע (₪)"
-                            ],
-                            "ערך": [
-                                f"{tab.calculated_results.get('purchase_tax', 0):,.0f}",
-                                f"{tab.calculated_results.get('down_payment', 0):,.0f}",
-                                f"{tab.calculated_results.get('loan_amount', 0):,.0f}",
-                                f"{tab.calculated_results.get('lawyer_fee', 0):,.0f}",
-                                f"{tab.calculated_results.get('broker_fee', 0):,.0f}",
-                                f"{tab.calculated_results.get('total_needed', 0):,.0f}",
-                                f"{tab.calculated_results.get('price_per_meter', 'N/A'):,.2f}" if tab.calculated_results.get('price_per_meter') is not None else "N/A"
-                            ]
-                        }
-                        key_financials_df = pd.DataFrame(key_financials_data)
-                        key_financials_df.to_excel(writer, sheet_name=sheet_name, startrow=start_row, startcol=0, index=False)
-
-                        if tab.loan_scenarios_data:
-                            start_row += len(key_financials_df) + 2
-                            loan_summary_df = pd.DataFrame(tab.loan_scenarios_data)
-                            loan_summary_df.to_excel(writer, sheet_name=sheet_name, startrow=start_row, startcol=0, index=False)
-
-                            start_row += len(loan_summary_df) + 2
-                            rent_comp_df = pd.DataFrame({
-                                "השוואת שכירות": tab.loan_scenarios_rent_comparison
-                            })
-                            rent_comp_df.to_excel(writer, sheet_name=sheet_name, startrow=start_row, startcol=0, index=False)
-
-                        current_amort_row = start_row + (len(rent_comp_df) + 2 if tab.loan_scenarios_data else 0) + 2 
-                        for df_idx, df in enumerate(tab.df_list): 
-                            if df is not None and not df.empty:
-                                writer.sheets[sheet_name].cell(row=current_amort_row, column=0, value=f"טבלת פריסה - תרחיש {df_idx+1}")
-                                current_amort_row += 1 
-                                df.to_excel(writer, sheet_name=sheet_name, startrow=current_amort_row, startcol=0, index=False)
-                                current_amort_row += len(df) + 3 
-
-                        img_col_start = 8 
-                        for fig_idx, fig in enumerate(tab.figure_list):
-                            if tab.df_list[fig_idx] is not None and not tab.df_list[fig_idx].empty: 
-                                buf = io.BytesIO()
-                                fig.savefig(buf, format='png', bbox_inches='tight')
-                                buf.seek(0)
-                                img = openpyxl.drawing.image.Image(buf)
-                                
-                                img.width = 500 
-                                img.height = 250 
-                                
-                                # Calculate anchor row for images to stack correctly
-                                if fig_idx == 0:
-                                    img.anchor = writer.sheets[sheet_name].cell(row=1, column=img_col_start)
-                                else:
-                                    # This assumes previous images are added and their height/position is known
-                                    # Adjust based on the actual positioning within Excel.
-                                    # A more robust way might involve tracking max row used + a fixed offset.
-                                    # For simplicity, using a fixed offset for now
-                                    img.anchor = writer.sheets[sheet_name].cell(row=writer.sheets[sheet_name]._images[-1].anchor.row + int(writer.sheets[sheet_name]._images[-1].height / 10 + 5), column=img_col_start)
-                                    
-                                writer.sheets[sheet_name].add_image(img)
-                            
-                    else:
-                        no_data_df = pd.DataFrame({"הודעה": ["אין נתונים זמינים עבור נכס זה (ייתכן שחסרים נתוני קלט או שהחישוב נכשל)."]})
-                        no_data_df.to_excel(writer, sheet_name=sheet_name, startrow=0, startcol=0, index=False)
-            
-            messagebox.showinfo("הצלחה", f"הנתונים נשמרו בהצלחה בקובץ {file_path}", parent=self.root)
-        except Exception as e:
-            messagebox.showerror("שגיאה בשמירה ל-Excel", f"אירעה שגיאה בעת שמירת הקובץ: {e}", parent=self.root)
 
 if __name__ == "__main__":
     root = tk.Tk()
