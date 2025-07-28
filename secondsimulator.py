@@ -7,12 +7,61 @@ import io
 from PIL import Image
 import openpyxl
 
-# Constants for fees (good practice to define them)
+# --- NEW IMPORTS FOR PDF GENERATION ---
+from reportlab.lib.pagesizes import letter, A4
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image as RLImage, PageBreak
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib.units import inch
+from reportlab.lib import colors
+# For Hebrew support in ReportLab:
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.lib.enums import TA_RIGHT, TA_LEFT, TA_CENTER
+from reportlab.lib.styles import ParagraphStyle
+
+# Register a font that supports Hebrew characters (e.g., Arial Unicode MS or DejaVuSans)
+# You might need to provide the full path to a .ttf file if it's not in your system's font paths
+# For example, download 'DejaVuSans.ttf' and place it in your script's directory, or
+# 'arial.ttf' if you are on Windows and it's typically found at C:/Windows/Fonts/arial.ttf
+
+# --- MODIFIED FONT REGISTRATION ---
+try:
+    # Register the regular font
+    pdfmetrics.registerFont(TTFont('DejaVuSans', 'DejaVuSans.ttf'))
+    # Register the bold font (assuming DejaVuSans-Bold.ttf exists)
+    pdfmetrics.registerFont(TTFont('DejaVuSans-Bold', 'DejaVuSans-Bold.ttf'))
+    # Register the font family to link regular and bold versions
+    pdfmetrics.registerFontFamily('DejaVuSans',
+                                  normal='DejaVuSans',
+                                  bold='DejaVuSans-Bold',
+                                  italic='DejaVuSans', # If you don't have italic, map to normal
+                                  boldItalic='DejaVuSans-Bold') # If you don't have bold italic, map to bold
+
+    # Define a style for Hebrew text that aligns right-to-left
+    # Note: ReportLab's bidi support can be complex. For simple strings, it often works.
+    # For complex RTL layouts, more advanced methods or external libraries might be needed.
+    # We will set alignment to TA_RIGHT for Hebrew.
+    heb_style = ParagraphStyle(name='Hebrew', fontName='DejaVuSans', fontSize=10, alignment=TA_RIGHT)
+    # Use the 'DejaVuSans-Bold' font name directly for headings if you prefer,
+    # or rely on the <b> tag and registerFontFamily for automatic bolding.
+    # For headings, it's often better to explicitly set the fontName to the bold variant
+    # if you want consistent bolding without relying on HTML tags inside Paragraphs.
+    heb_heading_style = ParagraphStyle(name='HebrewHeading', fontName='DejaVuSans-Bold', fontSize=14, alignment=TA_RIGHT, spaceAfter=6)
+    heb_subheading_style = ParagraphStyle(name='HebrewSubHeading', fontName='DejaVuSans-Bold', fontSize=12, alignment=TA_RIGHT, spaceAfter=4)
+except Exception as e:
+    messagebox.showwarning("Font Warning", f"Could not load DejaVuSans font for PDF. Hebrew text may not display correctly: {e}\nMake sure 'DejaVuSans.ttf' and 'DejaVuSans-Bold.ttf' are in the script's directory or provide full paths.")
+    # Fallback to a default font if DejaVuSans isn't found
+    heb_style = ParagraphStyle(name='Hebrew', fontName='Helvetica', fontSize=10, alignment=TA_RIGHT)
+    heb_heading_style = ParagraphStyle(name='HebrewHeading', fontName='Helvetica-Bold', fontSize=14, alignment=TA_RIGHT, spaceAfter=6)
+    heb_subheading_style = ParagraphStyle(name='HebrewSubHeading', fontName='Helvetica-Bold', fontSize=12, alignment=TA_RIGHT, spaceAfter=4)
+    
+# Constants for fees
 LAWYER_FEE_RATE = 0.01
 BROKER_FEE_RATE = 0.02
 
 def calculate_purchase_tax(price):
     # Tax brackets and rates for purchase tax (assuming Israeli tax law for example)
+    # These are illustrative and should be updated with actual current rates if this is for real use.
     brackets = [
         (0, 6055070, 8),
         (6055070, float('inf'), 10),
@@ -21,10 +70,9 @@ def calculate_purchase_tax(price):
     remaining_price = price
     for low, high, rate in brackets:
         if remaining_price > low:
-            # Calculate the portion of the remaining price that falls into the current bracket
             taxable_in_current_bracket = min(high, remaining_price) - low if remaining_price > low else 0
             tax += taxable_in_current_bracket * rate / 100
-            remaining_price -= taxable_in_current_bracket # Deduct the portion that was just taxed
+            remaining_price -= taxable_in_current_bracket
             if remaining_price <= 0:
                 break
     return tax
@@ -40,10 +88,10 @@ def calculate_monthly_payment(loan_amount, annual_rate, years):
         return 0.0
     months = years * 12
     monthly_rate = (annual_rate / 100) / 12
-    if monthly_rate == 0: # Avoid division by zero if rate is 0
+    if monthly_rate == 0:
         return loan_amount / months if months > 0 else 0.0
     
-    if abs(monthly_rate) < 1e-9: # If rate is extremely close to zero
+    if abs(monthly_rate) < 1e-9:
         return loan_amount / months if months > 0 else 0.0
 
     try:
@@ -67,18 +115,18 @@ def generate_amortization_df(loan_amount, annual_rate, years):
     data = []
 
     for month in range(1, months + 1):
-        if balance <= 0: # Loan paid off
+        if balance <= 0:
             break
 
         interest = balance * (annual_rate / 100) / 12
         principal = current_monthly_payment - interest
         
-        principal = min(principal, balance) # Ensure principal doesn't exceed balance
+        principal = min(principal, balance)
         
         balance -= principal
         
         data.append({
-            "חודש": round(month, 2), # Round month for consistency
+            "חודש": round(month, 2), 
             "קרן": round(principal, 2), 
             "ריבית": round(interest, 2),
             "יתרה": round(max(balance, 0), 2),
@@ -87,32 +135,64 @@ def generate_amortization_df(loan_amount, annual_rate, years):
 
     return pd.DataFrame(data)
 
-class PropertyTab:
-    def __init__(self, parent, idx):
-        self.idx = idx
-        self.frame = ttk.Frame(parent) # This frame will contain the canvas and scrollbar
-        self.frame.pack(expand=True, fill="both") # Make sure the main frame expands
+# --- NEW FUNCTION FOR ERROR MESSAGES WITH COPY ---
+def show_error_with_copy(title, message, parent=None):
+    top = tk.Toplevel(parent)
+    top.title(title)
+    top.transient(parent)
+    top.grab_set()
+    top.lift() # Bring to front
 
-        # Create a Canvas widget
-        self.canvas = tk.Canvas(self.frame, borderwidth=0, background="#f0f0f0") # Add background for visibility
+    # Center the Toplevel window
+    if parent:
+        parent.update_idletasks() # Ensure parent geometry is up-to-date
+        x = parent.winfo_x() + (parent.winfo_width() // 2) - (top.winfo_reqwidth() // 2)
+        y = parent.winfo_y() + (parent.winfo_height() // 2) - (top.winfo_reqheight() // 2)
+        top.geometry(f"+{x}+{y}")
+
+    tk.Label(top, text=message, wraplength=400, justify="center", padx=10, pady=10).pack()
+
+    button_frame = ttk.Frame(top)
+    button_frame.pack(pady=5)
+
+    def copy_to_clipboard():
+        top.clipboard_clear()
+        top.clipboard_append(message)
+        top.update() # Now it stays on the clipboard after the window is closed
+        top.destroy()
+
+    def close_window():
+        top.destroy()
+
+    ttk.Button(button_frame, text="סגור", command=close_window).pack(side="left", padx=5)
+    ttk.Button(button_frame, text="העתק שגיאה", command=copy_to_clipboard).pack(side="right", padx=5)
+
+    top.wait_window(top)
+
+
+class PropertyTab:
+    def __init__(self, parent, idx, root_window):
+        self.root = root_window
+        self.idx = idx
+        self.frame = ttk.Frame(parent)
+        self.frame.pack(expand=True, fill="both")
+
+        self.canvas = tk.Canvas(self.frame, borderwidth=0, background="#f0f0f0")
         self.canvas.pack(side="left", fill="both", expand=True)
 
-        # Create a Scrollbar and link it to the Canvas
         self.scrollbar = ttk.Scrollbar(self.frame, orient="vertical", command=self.canvas.yview)
         self.scrollbar.pack(side="right", fill="y")
 
-        # Configure the Canvas to use the scrollbar
         self.canvas.configure(yscrollcommand=self.scrollbar.set)
-        self.canvas.bind('<Configure>', self._on_canvas_configure) # Recalculate scroll region on resize
-        self.canvas.bind_all('<MouseWheel>', self._on_mousewheel) # Bind mouse wheel for scrolling
+        self.canvas.bind('<Configure>', self._on_canvas_configure)
+        self.canvas.bind("<Button-4>", self._on_mousewheel_up)
+        self.canvas.bind("<Button-5>", self._on_mousewheel_down)
+        self.canvas.bind("<MouseWheel>", self._on_mousewheel)
 
-        # Create a frame to hold all the tab's content inside the canvas
         self.content_frame = ttk.Frame(self.canvas, padding="10 10 10 10")
         self.canvas.create_window((0, 0), window=self.content_frame, anchor="nw")
 
-        # --- Now, all your existing widgets will be packed into self.content_frame ---
-
-        self.input_frame = ttk.Frame(self.content_frame) # Change parent to content_frame
+        self.input_frame = ttk.Frame(self.content_frame) 
         self.input_frame.pack(pady=10) 
 
         def new_entry():
@@ -158,7 +238,6 @@ class PropertyTab:
         self.tax_checkbox.grid(row=r, column=0, sticky="w", padx=padx, pady=pady)
         r += 1
 
-        # New: Checkbox to include tax in mortgage
         self.include_tax_in_mortgage_var = tk.BooleanVar()
         self.include_tax_in_mortgage_checkbox = ttk.Checkbutton(self.input_frame, 
                                                                  text="כלול מס רכישה במשכנתא", 
@@ -185,7 +264,6 @@ class PropertyTab:
         self.broker_checkbox.grid(row=r+1, column=0, sticky="w", padx=padx, pady=pady)
         r += 2 
         
-        # New: Calculate affordability checkbox and entry
         self.calculate_affordability_var = tk.BooleanVar()
         self.calculate_affordability_checkbox = ttk.Checkbutton(self.input_frame, 
                                                                  text="חשב מחיר נכס לפי הון עצמי (₪):", 
@@ -212,15 +290,14 @@ class PropertyTab:
             self.years_entries.append(years_entry)
             r += 1
 
-        self.calculate_tab_button = ttk.Button(self.content_frame, text="חשב נכס זה", command=self.calculate) # Change parent to content_frame
+        self.calculate_tab_button = ttk.Button(self.content_frame, text="חשב נכס זה", command=self.calculate) 
         self.calculate_tab_button.pack(pady=10)
 
-        self.results_frame = ttk.Frame(self.content_frame) # Change parent to content_frame
+        self.results_frame = ttk.Frame(self.content_frame)
         self.results_frame.pack(fill="x", expand=True, pady=10) 
         
         r_res = 0 
 
-        # New: Affordable Price Label
         self.affordable_price_label = ttk.Label(self.results_frame, text="", font=("Arial", 11, "bold"))
         self.affordable_price_label.grid(row=r_res, column=0, columnspan=2, sticky="w", padx=padx, pady=(0, 5))
         r_res += 1
@@ -274,6 +351,8 @@ class PropertyTab:
         self.figure_list = []
         self.ax_list = []
         self.canvas_list = []
+        self.temp_image_paths = [] 
+
         for i in range(3):
             fig = plt.Figure(figsize=(5, 2.5), dpi=100) 
             ax = fig.add_subplot(111)
@@ -289,8 +368,10 @@ class PropertyTab:
         self.loan_scenarios_data = [] 
         self.loan_scenarios_rent_comparison = []
 
-        # Ensure the canvas's scroll region is updated initially and whenever content changes
         self.content_frame.bind('<Configure>', self._on_frame_configure)
+
+        self.export_pdf_button = ttk.Button(self.content_frame, text="ייצוא ל-PDF", command=self.export_to_pdf)
+        self.export_pdf_button.pack(pady=10)
 
     def _on_frame_configure(self, event=None):
         """Update the scrollregion of the canvas based on the content frame size."""
@@ -299,20 +380,17 @@ class PropertyTab:
     def _on_canvas_configure(self, event=None):
         """Adjust content frame width to match canvas width when canvas resizes."""
         canvas_width = event.width
+        # This will adjust the width of the window *inside* the canvas
         self.canvas.itemconfig(self.canvas.create_window((0, 0), window=self.content_frame, anchor="nw"), width=canvas_width)
 
-
     def _on_mousewheel(self, event):
-        """Enable mouse wheel scrolling."""
-        # For Windows/Linux: event.delta is typically +/-120 per scroll "click"
-        # For macOS: event.delta is typically a smaller value, actual pixels
-        if event.delta: # Check if delta exists (it does for mousewheel)
-            # Normalize delta to be consistent across platforms
-            if event.num == 5 or event.delta < 0: # Mouse wheel down
-                self.canvas.yview_scroll(1, "unit")
-            elif event.num == 4 or event.delta > 0: # Mouse wheel up
-                self.canvas.yview_scroll(-1, "unit")
+        self.canvas.yview_scroll(int(-1*(event.delta/120)), "units")
 
+    def _on_mousewheel_up(self, event):
+        self.canvas.yview_scroll(-1, "units")
+
+    def _on_mousewheel_down(self, event):
+        self.canvas.yview_scroll(1, "units")
 
     def _toggle_lawyer_fee_entry(self):
         if self.manual_lawyer_fee_var.get():
@@ -334,11 +412,11 @@ class PropertyTab:
     def _toggle_affordability_calculation(self):
         if self.calculate_affordability_var.get():
             self.available_funds_entry.config(state='normal')
-            self.price_entry.config(state='disabled') # Disable price entry if calculating affordability
+            self.price_entry.config(state='disabled')
         else:
             self.available_funds_entry.config(state='disabled')
             self.available_funds_entry.delete(0, tk.END)
-            self.price_entry.config(state='normal') # Re-enable price entry
+            self.price_entry.config(state='normal')
 
     def clear_results(self):
         self.affordable_price_label.config(text="")
@@ -368,7 +446,6 @@ class PropertyTab:
         is_active_tab = (self.idx == self.frame.master.index(self.frame)) if hasattr(self.frame.master, 'index') else False
 
         try:
-            # Initialize core financial values
             price = 0.0
             loan_amount = 0.0
             down_payment = 0.0
@@ -377,54 +454,51 @@ class PropertyTab:
             broker_fee = 0.0
             total_needed = 0.0
 
-            # --- Input Validation and Extraction ---
             ltv_str = self.ltv_entry.get()
             if not ltv_str:
                 if is_active_tab:
-                    messagebox.showerror("קלט חסר", "יש להזין אחוז מימון (LTV).", parent=self.frame)
+                    show_error_with_copy("קלט חסר", "יש להזין אחוז מימון (LTV).", parent=self.root)
                 return False
             ltv = float(ltv_str)
             if not (0 <= ltv <= 100):
                 if is_active_tab:
-                    messagebox.showerror("קלט לא חוקי", "אחוז מימון (LTV) חייב להיות בין 0 ל-100.", parent=self.frame)
+                    show_error_with_copy("קלט לא חוקי", "אחוז מימון (LTV) חייב להיות בין 0 ל-100.", parent=self.root)
                 return False
 
             area_str = self.area_entry.get()
             area = float(area_str) if area_str else None
             if area is not None and area <= 0:
                 if is_active_tab:
-                    messagebox.showerror("קלט לא חוקי", "שטח המטר המרובע חייב להיות מספר חיובי.", parent=self.frame)
+                    show_error_with_copy("קלט לא חוקי", "שטח המטר המרובע חייב להיות מספר חיובי.", parent=self.root)
                 return False
 
             rent_str = self.rent_entry.get()
             rent = float(rent_str) if rent_str else None
             if rent is not None and rent < 0:
                 if is_active_tab:
-                    messagebox.showerror("קלט לא חוקי", "שכירות חודשית צפויה אינה יכולה להיות שלילית.", parent=self.frame)
+                    show_error_with_copy("קלט לא חוקי", "שכירות חודשית צפויה אינה יכולה להיות שלילית.", parent=self.root)
                 return False
 
-            # --- Affordability Calculation Logic ---
             if self.calculate_affordability_var.get():
                 available_funds_str = self.available_funds_entry.get()
                 if not available_funds_str:
                     if is_active_tab:
-                        messagebox.showerror("קלט חסר", "יש להזין את סכום הכסף הפנוי.", parent=self.frame)
+                        show_error_with_copy("קלט חסר", "יש להזין את סכום הכסף הפנוי.", parent=self.root)
                     return False
                 available_funds = float(available_funds_str)
                 if available_funds <= 0:
                     if is_active_tab:
-                        messagebox.showerror("קלט לא חוקי", "סכום הכסף הפנוי חייב להיות חיובי.", parent=self.frame)
+                        show_error_with_copy("קלט לא חוקי", "סכום הכסף הפנוי חייב להיות חיובי.", parent=self.root)
                     return False
 
-                # Iterative approach to find the affordable price due to non-linear tax
-                estimated_price = available_funds / ((1 - ltv / 100) + LAWYER_FEE_RATE + BROKER_FEE_RATE) # Initial guess
+                estimated_price = available_funds / ((1 - ltv / 100) + LAWYER_FEE_RATE + BROKER_FEE_RATE)
                 
-                tolerance = 1.0 # Tolerance for price convergence (e.g., 1 NIS)
+                tolerance = 1.0
                 max_iterations = 100
                 current_iteration = 0
 
                 while current_iteration < max_iterations:
-                    current_down_payment_ratio = (1 - ltv / 100) # Percentage of price for down payment
+                    current_down_payment_ratio = (1 - ltv / 100)
                     current_down_payment_from_price = estimated_price * current_down_payment_ratio
                     current_purchase_tax = 0 if self.skip_tax_var.get() else calculate_purchase_tax(estimated_price)
                     
@@ -442,19 +516,11 @@ class PropertyTab:
                     else:
                         current_broker_fee = estimated_price * BROKER_FEE_RATE
 
-                    # Calculate total funds needed based on whether tax is included in mortgage
                     if self.include_tax_in_mortgage_var.get():
-                        # If tax is included in the mortgage, it's part of the loan, not the direct cash outlay.
-                        # So, available funds cover down payment (price - loan), lawyer, and broker.
-                        # The loan would be (estimated_price * LTV) + current_purchase_tax.
-                        # Down payment is estimated_price - loan.
-                        # So, total cash needed = (estimated_price - ((estimated_price * LTV) + current_purchase_tax)) + lawyer + broker
-                        # Simplified: estimated_price * (1 - LTV/100) - current_purchase_tax + lawyer + broker
-                        current_loan_amount_for_affordability = (estimated_price * (ltv / 100)) + current_purchase_tax
+                        current_loan_amount_for_affordability = ((estimated_price + current_purchase_tax)* (ltv / 100)) 
                         current_down_payment_for_affordability = estimated_price - current_loan_amount_for_affordability
                         current_total_funds_needed = current_down_payment_for_affordability + current_lawyer_fee + current_broker_fee
                     else:
-                        # If tax is NOT included in the mortgage, it's part of the cash outlay.
                         current_total_funds_needed = current_down_payment_from_price + current_purchase_tax + current_lawyer_fee + current_broker_fee
 
                     diff = available_funds - current_total_funds_needed
@@ -463,38 +529,34 @@ class PropertyTab:
                         price = estimated_price
                         break
                     
-                    # Adjust estimated price based on the difference for convergence
-                    # Using a smaller factor (e.g., 0.1 to 0.5) can help prevent overshooting,
-                    # especially with non-linear tax.
                     estimated_price += diff * 0.5 
 
                     current_iteration += 1
                 
                 if current_iteration == max_iterations:
                     if is_active_tab:
-                        messagebox.showwarning("אזהרת חישוב", "לא ניתן למצוא מחיר נכס מדויק עבור ההון העצמי הנתון לאחר מספר רב של ניסיונות. ייתכן שהסכום המחושב הוא קירוב.", parent=self.frame)
-                    price = estimated_price # Use the last estimated price as the result
+                        show_error_with_copy("אזהרת חישוב", "לא ניתן למצוא מחיר נכס מדויק עבור ההון העצמי הנתון לאחר מספר רב של ניסיונות. ייתכן שהסכום המחושב הוא קירוב.", parent=self.root)
+                    price = estimated_price 
 
                 self.price_entry.config(state='disabled')
                 self.price_entry.delete(0, tk.END)
                 self.price_entry.insert(0, f"{price:,.0f}")
                 self.affordable_price_label.config(text=f"מחיר הנכס המקסימלי שניתן לרכוש: {price:,.0f} ₪")
 
-            else: # If not calculating affordability, get price from input
+            else: 
                 price_str = self.price_entry.get()
                 if not price_str:
                     if is_active_tab:
-                        messagebox.showerror("קלט חסר", "יש להזין מחיר דירה.", parent=self.frame)
+                        show_error_with_copy("קלט חסר", "יש להזין מחיר דירה.", parent=self.root)
                     return False 
                 price = float(price_str)
                 if price <= 0:
                     if is_active_tab:
-                        messagebox.showerror("קלט לא חוקי", "מחיר הדירה חייב להיות מספר חיובי.", parent=self.frame)
+                        show_error_with_copy("קלט לא חוקי", "מחיר הדירה חייב להיות מספר חיובי.", parent=self.root)
                     return False
                 self.price_entry.config(state='normal')
-                self.affordable_price_label.config(text="") # Clear label if not calculating affordability
+                self.affordable_price_label.config(text="") 
 
-            # --- Calculate Fees and Loan Amounts ---
             purchase_tax = 0 if self.skip_tax_var.get() else calculate_purchase_tax(price)
             
             if self.manual_lawyer_fee_var.get():
@@ -502,11 +564,11 @@ class PropertyTab:
                     lawyer_fee = float(self.lawyer_fee_manual_entry.get())
                     if lawyer_fee < 0:
                         if is_active_tab:
-                            messagebox.showerror("קלט לא חוקי", "עלות עו\"ד ידנית אינה יכולה להיות שלילית.", parent=self.frame)
+                            show_error_with_copy("קלט לא חוקי", "עלות עו\"ד ידנית אינה יכולה להיות שלילית.", parent=self.root)
                         return False
                 except ValueError:
                     if is_active_tab:
-                        messagebox.showerror("שגיאת קלט", "עלות עו\"ד ידנית חייבת להיות מספר.", parent=self.frame)
+                        show_error_with_copy("שגיאת קלט", "עלות עו\"ד ידנית חייבת להיות מספר.", parent=self.root)
                     return False
             else:
                 lawyer_fee = estimate_lawyer_fee(price)
@@ -518,33 +580,29 @@ class PropertyTab:
                     broker_fee = float(self.broker_fee_manual_entry.get())
                     if broker_fee < 0:
                         if is_active_tab:
-                            messagebox.showerror("קלט לא חוקי", "עלות מתווך ידנית אינה יכולה להיות שלילית.", parent=self.frame)
+                            show_error_with_copy("קלט לא חוקי", "עלות מתווך ידנית אינה יכולה להיות שלילית.", parent=self.root)
                         return False
                 except ValueError:
                     if is_active_tab:
-                        messagebox.showerror("שגיאת קלט", "עלות מתווך ידנית חייבת להיות מספר.", parent=self.frame)
+                        show_error_with_copy("שגיאת קלט", "עלות מתווך ידנית חייבת להיות מספר.", parent=self.root)
                     return False
             else:
                 broker_fee = estimate_broker_fee(price)
 
-            # Recalculate loan_amount and down_payment based on tax inclusion
             base_loan_amount = price * (ltv / 100)
             if self.include_tax_in_mortgage_var.get():
-                loan_amount = base_loan_amount + purchase_tax
-                # If tax is included in the mortgage, the down payment is simply the price minus the *new, higher* loan amount.
-                down_payment = price - loan_amount 
+                loan_amount_f=(price + purchase_tax)
+                loan_amount = loan_amount_f* (ltv / 100)
+                down_payment =( price + purchase_tax )* ((100-ltv) / 100)
             else:
                 loan_amount = base_loan_amount
-                # If tax is NOT included, down payment covers the property's non-financed portion PLUS the tax.
                 down_payment = (price - base_loan_amount) + purchase_tax
 
             total_needed = down_payment + lawyer_fee + broker_fee
 
-            # If calculating affordability, ensure the final total_needed matches available_funds for display consistency
             if self.calculate_affordability_var.get():
-                total_needed = available_funds # Set total_needed to available_funds for display
+                total_needed = available_funds 
 
-            # Store calculated results
             self.calculated_results = {
                 "purchase_tax": purchase_tax,
                 "down_payment": down_payment,
@@ -576,7 +634,6 @@ class PropertyTab:
             self.loan_scenarios_data = [] 
             self.loan_scenarios_rent_comparison = []
 
-            # --- Extract and Validate Loan Scenarios (Rates and Years) ---
             rates = []
             years = []
             valid_scenarios_count = 0
@@ -592,22 +649,22 @@ class PropertyTab:
                         current_rate = float(rate_val)
                         if current_rate < 0:
                             if is_active_tab:
-                                messagebox.showerror("קלט לא חוקי", f"ריבית שנתית (תרחיש {i+1}) אינה יכולה להיות שלילית.", parent=self.frame)
+                                show_error_with_copy("קלט לא חוקי", f"ריבית שנתית (תרחיש {i+1}) אינה יכולה להיות שלילית.", parent=self.root)
                             return False
                     except ValueError:
                         if is_active_tab:
-                            messagebox.showerror("שגיאת קלט", f"ריבית שנתית (תרחיש {i+1}) חייבת להיות מספר.", parent=self.frame)
+                            show_error_with_copy("שגיאת קלט", f"ריבית שנתית (תרחיש {i+1}) חייבת להיות מספר.", parent=self.root)
                         return False
                     
                     try:
                         current_years = int(years_val)
                         if current_years <= 0:
                             if is_active_tab:
-                                messagebox.showerror("קלט לא חוקי", f"שנים להחזר (תרחיש {i+1}) חייבות להיות מספר חיובי שלם.", parent=self.frame)
+                                show_error_with_copy("קלט לא חוקי", f"שנים להחזר (תרחיש {i+1}) חייבות להיות מספר חיובי שלם.", parent=self.root)
                             return False
                     except ValueError:
                         if is_active_tab:
-                            messagebox.showerror("שגיאת קלט", f"שנים להחזר (תרחיש {i+1}) חייבות להיות מספר שלם.", parent=self.frame)
+                            show_error_with_copy("שגיאת קלט", f"שנים להחזר (תרחיש {i+1}) חייבות להיות מספר שלם.", parent=self.root)
                         return False
                     valid_scenarios_count += 1
                 
@@ -616,13 +673,12 @@ class PropertyTab:
 
             if valid_scenarios_count == 0:
                 if is_active_tab:
-                    messagebox.showwarning("אין נתונים לחישוב", "אנא הזן/י לפחות ריבית שנתית אחת ושנים להחזר עבור תרחיש.", parent=self.frame)
+                    show_error_with_copy("אין נתונים לחישוב", "אנא הזן/י לפחות ריבית שנתית אחת ושנים להחזר עבור תרחיש.", parent=self.root)
                 return False 
             
             self.calculated_results["input_rates"] = rates
             self.calculated_results["input_years"] = years
 
-            # --- Display Results ---
             self.tax_label.config(text=f"מס רכישה משוער: {purchase_tax:,.0f} ₪")
             self.downpayment_label.config(text=f"הון עצמי נדרש: {down_payment:,.0f} ₪")
             self.loan_amount_label.config(text=f"סכום הלוואה מהבנק: {loan_amount:,.0f} ₪")
@@ -637,7 +693,14 @@ class PropertyTab:
 
             self.table.delete(*self.table.get_children()) 
 
-            # --- Process and Display Loan Scenarios ---
+            for p in self.temp_image_paths:
+                try:
+                    import os
+                    os.remove(p)
+                except OSError:
+                    pass
+            self.temp_image_paths = []
+
             for i in range(3):
                 if rates[i] is not None and years[i] is not None:
                     df = generate_amortization_df(loan_amount, rates[i], years[i])
@@ -707,32 +770,242 @@ class PropertyTab:
                     self.loan_scenarios_data.append({}) 
                     self.loan_scenarios_rent_comparison.append("אין נתוני השוואת שכירות עבור תרחיש זה")
             
-            # After updating all content, re-configure scroll region
             self._on_frame_configure()
-            
+
             return True 
 
         except ValueError as e:
             if is_active_tab:
-                messagebox.showerror("שגיאת קלט", f"שגיאה בנתונים: {e}\nאנא ודא/י שכל השדות המספריים מולאו נכונה.", parent=self.frame)
+                show_error_with_copy("שגיאת קלט", f"שגיאה בנתונים: {e}\nאנא ודא/י שכל השדות המספריים מולאו נכונה.", parent=self.root)
             return False
         except Exception as e:
             if is_active_tab:
-                messagebox.showerror("שגיאה כללית", f"אירעה שגיאה בלתי צפויה: {e}", parent=self.frame)
+                show_error_with_copy("שגיאה כללית", f"אירעה שגיאה בלתי צפויה: {e}", parent=self.root)
             return False
 
-# --- Main Application Window ---
+    def export_to_pdf(self):
+        if not self.calculate():
+            return
+
+        filepath = filedialog.asksaveasfilename(defaultextension=".pdf", 
+                                                filetypes=[("PDF files", "*.pdf")],
+                                                title="שמור דוח נכס (PDF)")
+        if not filepath:
+            return
+
+        try:
+            doc = SimpleDocTemplate(filepath, pagesize=A4, rightMargin=36, leftMargin=36, topMargin=36, bottomMargin=36) # Added margins
+            
+            # Use the Hebrew styles defined globally
+            styles = getSampleStyleSheet()
+            # Ensure these styles are added if they were not created due to font loading errors
+            # (they are already added in the global scope if font loading succeeded)
+            if 'Hebrew' not in styles:
+                styles.add(heb_style)
+            if 'HebrewHeading' not in styles:
+                styles.add(heb_heading_style)
+            if 'HebrewSubHeading' not in styles:
+                styles.add(heb_subheading_style)
+            
+            story = []
+
+            # --- Title ---
+            alias = self.calculated_results.get("input_alias", f"נכס {self.idx + 1}")
+            story.append(Paragraph(f"<b>דוח נכס: {alias}</b>", styles['HebrewHeading']))
+            story.append(Spacer(1, 0.2 * inch))
+
+            # --- Input Data Section ---
+            story.append(Paragraph("<b>פרטי קלט:</b>", styles['HebrewSubHeading']))
+            story.append(Spacer(1, 0.1 * inch))
+
+            input_data = [
+                ("קישור:", self.calculated_results.get("input_link", "")),
+                ("מחיר דירה (₪):", f"{self.calculated_results.get('calculated_price', 0):,.0f}"),
+                ("מטר מרובע (שטח):", self.calculated_results.get("input_area", "")),
+                ("אחוז מימון (LTV) %:", self.calculated_results.get("input_ltv", "")),
+                ("שכירות חודשית צפויה (₪):", self.calculated_results.get("input_rent", "")),
+                ("בטל מס רכישה:", "כן" if self.calculated_results.get("input_skip_tax") else "לא"),
+                ("כלול מס רכישה במשכנתא:", "כן" if self.calculated_results.get("input_include_tax_in_mortgage") else "לא"),
+            ]
+            
+            if self.calculated_results.get("input_manual_lawyer_fee"):
+                input_data.append(("הזן עלות עו\"ד ידנית:", self.calculated_results.get("input_lawyer_fee_manual_value", "")))
+            else:
+                input_data.append(("עלות עו\"ד משוערת (% מהמחיר):", f"{LAWYER_FEE_RATE*100:.0f}%"))
+
+            if self.calculated_results.get("input_manual_broker_fee"):
+                 input_data.append(("הזן עלות מתווך ידנית:", self.calculated_results.get("input_broker_fee_manual_value", "")))
+            elif self.calculated_results.get("input_skip_broker"):
+                input_data.append(("בטל עלות מתווך:", "כן"))
+            else:
+                input_data.append(("עלות מתווך משוערת (% מהמחיר):", f"{BROKER_FEE_RATE*100:.0f}%"))
+            
+            if self.calculated_results.get("input_calculate_affordability"):
+                input_data.append(("חשב מחיר נכס לפי הון עצמי (₪):", self.calculated_results.get("input_available_funds", "")))
+
+            # Use the Hebrew style for Paragraphs in the table
+            input_table_data = [[Paragraph(f"<b>{k}</b>", styles['Hebrew']), Paragraph(str(v), styles['Hebrew'])] for k, v in input_data]
+            
+            # Adjust colWidths to prevent cutting and fit content
+            table_col_widths = [doc.width * 0.4, doc.width * 0.6] # Allocate width dynamically
+            input_table = Table(input_table_data, colWidths=table_col_widths)
+            input_table.setStyle(TableStyle([
+                ('ALIGN', (0,0), (-1,-1), 'RIGHT'), # Align right for Hebrew
+                ('VALIGN', (0,0), (-1,-1), 'TOP'),
+                ('FONTNAME', (0,0), (0,-1), 'DejaVuSans-Bold'), # This now refers to the registered bold font
+                ('FONTNAME', (1,0), (1,-1), 'DejaVuSans'), # This now refers to the registered normal font
+                ('BOTTOMPADDING', (0,0), (-1,-1), 2),
+                ('GRID', (0,0), (-1,-1), 0.25, colors.black),
+                ('BACKGROUNDS', (0,0), (-1,-1), [colors.HexColor('#F0F8FF'), None]), # Light blue for alternating rows
+            ]))
+            story.append(input_table)
+            story.append(Spacer(1, 0.3 * inch))
+
+            # --- Calculation Summary ---
+            story.append(Paragraph("<b>סיכום חישובים:</b>", styles['HebrewSubHeading']))
+            story.append(Spacer(1, 0.1 * inch))
+
+            summary_data = [
+                ("מס רכישה משוער:", f"{self.calculated_results.get('purchase_tax', 0):,.0f} ₪"),
+                ("הון עצמי נדרש:", f"{self.calculated_results.get('down_payment', 0):,.0f} ₪"),
+                ("סכום הלוואה מהבנק:", f"{self.calculated_results.get('loan_amount', 0):,.0f} ₪"),
+                ("עלות עורך דין משוערת:", f"{self.calculated_results.get('lawyer_fee', 0):,.0f} ₪"),
+                ("עלות מתווך משוערת:", f"{self.calculated_results.get('broker_fee', 0):,.0f} ₪"),
+                ("סה\"כ הון דרוש:", f"{self.calculated_results.get('total_needed', 0):,.0f} ₪"),
+            ]
+            if self.calculated_results.get("price_per_meter") is not None:
+                summary_data.append(("מחיר למטר מרובע:", f"{self.calculated_results.get('price_per_meter', 0):,.2f} ₪"))
+
+            summary_table_data = [[Paragraph(f"<b>{k}</b>", styles['Hebrew']), Paragraph(str(v), styles['Hebrew'])] for k, v in summary_data]
+            summary_table = Table(summary_table_data, colWidths=table_col_widths)
+            summary_table.setStyle(TableStyle([
+                ('ALIGN', (0,0), (-1,-1), 'RIGHT'), # Align right for Hebrew
+                ('VALIGN', (0,0), (-1,-1), 'TOP'),
+                ('FONTNAME', (0,0), (0,-1), 'DejaVuSans-Bold'), # This too
+                ('FONTNAME', (1,0), (1,-1), 'DejaVuSans'), # And this
+                ('BOTTOMPADDING', (0,0), (-1,-1), 2),
+                ('GRID', (0,0), (-1,-1), 0.25, colors.black),
+                ('BACKGROUNDS', (0,0), (-1,-1), [colors.HexColor('#F0F8FF'), None]),
+            ]))
+            story.append(summary_table)
+            story.append(Spacer(1, 0.3 * inch))
+
+            # --- Loan Scenarios Table ---
+            story.append(Paragraph("<b>תרחישי הלוואה:</b>", styles['HebrewSubHeading']))
+            story.append(Spacer(1, 0.1 * inch))
+
+            loan_table_headers = ["תרחיש", "סכום הלוואה (₪)", "ריבית שנתית (%)", "שנים להחזר", "תשלום חודשי (₪)", "סה\"כ ריבית (₪)", "סה\"כ תשלום כולל (₪)"]
+            
+            # Wrap headers in Paragraphs for font styling
+            loan_table_data = [[Paragraph(header, styles['Hebrew']) for header in loan_table_headers]]
+            
+            for i, scenario in enumerate(self.loan_scenarios_data):
+                if scenario:
+                    # Wrap each cell's content in Paragraph for font styling
+                    loan_table_data.append([
+                        Paragraph(scenario.get("תרחיש", ""), styles['Hebrew']),
+                        Paragraph(scenario.get("סכום הלוואה (₪)", ""), styles['Hebrew']),
+                        Paragraph(scenario.get("ריבית שנתית (%)", ""), styles['Hebrew']),
+                        Paragraph(scenario.get("שנים להחזר", ""), styles['Hebrew']),
+                        Paragraph(scenario.get("תשלום חודשי (₪)", ""), styles['Hebrew']),
+                        Paragraph(scenario.get("סה\"כ ריבית (₪)", ""), styles['Hebrew']),
+                        Paragraph(scenario.get("סה\"כ תשלום כולל (₪)", ""), styles['Hebrew'])
+                    ])
+            
+            if len(loan_table_data) > 1:
+                # Calculate optimal column widths based on content or fixed proportions
+                # Adjust colWidths to fit content. A4 width is ~595 points, effective width ~523 points.
+                # 523 / 7 columns ~= 75 points per column. Let's make it a bit more flexible.
+                col_widths = [doc.width * 0.12, doc.width * 0.17, doc.width * 0.12, doc.width * 0.1, doc.width * 0.17, doc.width * 0.16, doc.width * 0.16] # Adjusted widths
+                
+                loan_table = Table(loan_table_data, colWidths=col_widths)
+                loan_table.setStyle(TableStyle([
+                    ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#ADD8E6')),
+                    ('TEXTCOLOR', (0,0), (-1,0), colors.black),
+                    ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+                    ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+                    ('FONTNAME', (0,0), (-1,0), 'DejaVuSans-Bold'), # Ensure header font is bold
+                    ('FONTSIZE', (0,0), (-1,0), 9), # Smaller font for table headers
+                    ('BOTTOMPADDING', (0,0), (-1,0), 6),
+                    ('BACKGROUNDS', (0,1), (-1,-1), [colors.beige, colors.white]),
+                    ('GRID', (0,0), (-1,-1), 0.25, colors.black),
+                    ('FONTNAME', (0,1), (-1,-1), 'DejaVuSans'), # Regular font for table data
+                    ('FONTSIZE', (0,1), (-1,-1), 8), # Smaller font for table data
+                ]))
+                story.append(loan_table)
+                story.append(Spacer(1, 0.3 * inch))
+            else:
+                story.append(Paragraph("אין נתוני הלוואה לתרחישים.", styles['Hebrew']))
+                story.append(Spacer(1, 0.3 * inch))
+
+            # --- Rent Comparison ---
+            if any(self.loan_scenarios_rent_comparison):
+                story.append(Paragraph("<b>השוואת שכירות:</b>", styles['HebrewSubHeading']))
+                story.append(Spacer(1, 0.1 * inch))
+                for rent_comp_str in self.loan_scenarios_rent_comparison:
+                    if rent_comp_str:
+                        story.append(Paragraph(rent_comp_str, styles['Hebrew']))
+                        story.append(Spacer(1, 0.05 * inch))
+                story.append(Spacer(1, 0.3 * inch))
+
+            # --- Amortization Graphs ---
+            story.append(Paragraph("<b>גרפי פירעון:</b>", styles['HebrewSubHeading']))
+            story.append(Spacer(1, 0.1 * inch))
+
+            for i, fig in enumerate(self.figure_list):
+                # Check if df_list[i] is not None AND not empty
+                if self.df_list[i] is not None and not self.df_list[i].empty: 
+                    buf = io.BytesIO()
+                    fig.savefig(buf, format='png', dpi=200, bbox_inches='tight') # Increased DPI for better quality
+                    buf.seek(0)
+                    
+                    img = RLImage(buf)
+                    
+                    # Calculate aspect ratio to fit within page width
+                    img_width, img_height = img.drawWidth, img.drawHeight
+                    aspect_ratio = img_height / img_width
+                    
+                    # Target width for the image (e.g., 7 inches, leaving margins)
+                    desired_width = 7 * inch # Adjusted to fit page width with margins
+                    desired_height = desired_width * aspect_ratio
+
+                    # If the image is too tall, scale down based on height as well
+                    if desired_height > (A4[1] - (36*2 + 1*inch)): # A4 height - top/bottom margins - some space for title/text
+                         desired_height = (A4[1] - (36*2 + 1*inch))
+                         desired_width = desired_height / aspect_ratio
+                    
+                    img.drawWidth = desired_width
+                    img.drawHeight = desired_height
+                    
+                    # Add PageBreak if graph won't fit on current page
+                    current_y_pos = doc.height - doc.topMargin - sum(el.wrapOn(doc, doc.width, doc.height)[1] for el in story[-2:]) # Estimate height of last elements
+                    if (current_y_pos - desired_height - (0.5*inch)) < doc.bottomMargin and i > 0: # Check if there's enough space
+                        story.append(PageBreak())
+                        story.append(Paragraph(f"<b>גרפי פירעון (המשך):</b>", styles['HebrewSubHeading']))
+                        story.append(Spacer(1, 0.1 * inch))
+
+                    story.append(Paragraph(f"<b>תרחיש {i+1}</b>", styles['Hebrew']))
+                    story.append(img)
+                    story.append(Spacer(1, 0.2 * inch))
+            
+            doc.build(story)
+            show_error_with_copy("ייצוא ל-PDF", "הדוח נשמר בהצלחה כקובץ PDF.", parent=self.root)
+
+        except Exception as e:
+            show_error_with_copy("שגיאת ייצוא ל-PDF", f"אירעה שגיאה בעת ייצוא ל-PDF: {e}", parent=self.root)
+
+
 class MortgageCalculatorApp:
     def __init__(self, root):
         self.root = root
         self.root.title("מחשבון נדל\"ן מקיף")
-        self.root.geometry("1200x900") # Increased default size for better visibility
+        self.root.geometry("1200x900") 
 
         self.notebook = ttk.Notebook(root)
         self.notebook.pack(expand=True, fill="both", padx=10, pady=10)
 
         self.property_tabs = []
-        self.add_tab() # Start with one tab
+        self.add_tab()
 
         menu_bar = tk.Menu(root)
         root.config(menu=menu_bar)
@@ -747,13 +1020,13 @@ class MortgageCalculatorApp:
 
     def add_tab(self):
         idx = len(self.property_tabs)
-        new_tab = PropertyTab(self.notebook, idx)
+        new_tab = PropertyTab(self.notebook, idx, self.root) 
         self.property_tabs.append(new_tab)
         self.notebook.add(new_tab.frame, text=f"נכס {idx + 1}")
-        self.notebook.select(new_tab.frame) # Switch to the new tab
+        self.notebook.select(new_tab.frame) 
 
     def save_data(self):
-        filepath = filedialog.asksaveasfilename(defaultextension=".xlsx", # Corrected here
+        filepath = filedialog.asksaveasfilename(defaultextension=".xlsx", 
                                                 filetypes=[("Excel files", "*.xlsx")],
                                                 title="שמור נתוני נכסים")
         if not filepath:
@@ -763,7 +1036,7 @@ class MortgageCalculatorApp:
             with pd.ExcelWriter(filepath, engine='openpyxl') as writer:
                 summary_data = []
                 for idx, prop_tab in enumerate(self.property_tabs):
-                    prop_tab.calculate() # This populates calculated_results and loan_scenarios_data
+                    prop_tab.calculate() 
                     
                     results = prop_tab.calculated_results
                     loan_scenarios = prop_tab.loan_scenarios_data
@@ -772,14 +1045,13 @@ class MortgageCalculatorApp:
                     alias = results.get("input_alias", f"נכס {idx + 1}")
                     link = results.get("input_link", "")
 
-                    # Main property details
                     summary_row = {
                         "Alias": alias,
                         "Link": link,
                         "מחיר דירה (₪)": results.get("calculated_price"),
                         "מטר מרובע (שטח)": results.get("input_area"),
                         "אחוז מימון (LTV) %": results.get("input_ltv"),
-                        "שכירות חודשית צפויה (₪)": results.get("rent"),
+                        "שכירות חודשית צפויה (₪)": results.get("input_rent"),
                         "בטל מס רכישה": "כן" if results.get("input_skip_tax") else "לא",
                         "כלול מס רכישה במשכנתא": "כן" if results.get("input_include_tax_in_mortgage") else "לא",
                         "הזן עלות עו\"ד ידנית": "כן" if results.get("input_manual_lawyer_fee") else "לא",
@@ -798,7 +1070,6 @@ class MortgageCalculatorApp:
                         "מחיר למטר מרובע (₪)": results.get("price_per_meter"),
                     }
                     
-                    # Add loan scenarios to summary row
                     for i, scenario in enumerate(loan_scenarios):
                         prefix = f"תרחיש {i+1} - "
                         summary_row[prefix + "סכום הלוואה (₪)"] = scenario.get("סכום הלוואה (₪)")
@@ -813,7 +1084,6 @@ class MortgageCalculatorApp:
 
                     summary_data.append(summary_row)
 
-                    # Write amortization tables to separate sheets if available
                     for i, df in enumerate(prop_tab.df_list):
                         if df is not None and not df.empty:
                             sheet_name = f"{alias}_תרחיש_{i+1}"
@@ -821,13 +1091,13 @@ class MortgageCalculatorApp:
 
                 pd.DataFrame(summary_data).to_excel(writer, sheet_name="סיכום נכסים", index=False)
             
-            messagebox.showinfo("שמירה בוצעה", "הנתונים נשמרו בהצלחה לקובץ Excel.", parent=self.root)
+            show_error_with_copy("שמירה בוצעה", "הנתונים נשמרו בהצלחה לקובץ Excel.", parent=self.root)
 
         except Exception as e:
-            messagebox.showerror("שגיאה בשמירה", f"אירעה שגיאה בעת שמירת הנתונים: {e}", parent=self.root)
+            show_error_with_copy("שגיאה בשמירה", f"אירעה שגיאה בעת שמירת הנתונים: {e}", parent=self.root)
 
     def load_data(self):
-        filepath = filedialog.askopenfilename(defaultextension=".xlsx", # Corrected here
+        filepath = filedialog.askopenfilename(defaultextension=".xlsx", 
                                                 filetypes=[("Excel files", "*.xlsx")],
                                                 title="טען נתוני נכסים")
         if not filepath:
@@ -836,13 +1106,12 @@ class MortgageCalculatorApp:
         try:
             xls = pd.ExcelFile(filepath)
             
-            # Clear existing tabs
             for _ in range(len(self.property_tabs)):
                 self.notebook.forget(0)
             self.property_tabs = []
 
             if "סיכום נכסים" not in xls.sheet_names:
-                messagebox.showerror("שגיאה בטעינה", "קובץ Excel אינו מכיל גיליון 'סיכום נכסים'.", parent=self.root)
+                show_error_with_copy("שגיאה בטעינה", "קובץ Excel אינו מכיל גיליון 'סיכום נכסים'.", parent=self.root)
                 return
 
             summary_df = pd.read_excel(xls, sheet_name="סיכום נכסים")
@@ -851,7 +1120,6 @@ class MortgageCalculatorApp:
                 self.add_tab()
                 current_tab = self.property_tabs[-1]
 
-                # Populate input fields
                 current_tab.alias_entry.delete(0, tk.END)
                 current_tab.alias_entry.insert(0, row.get("Alias", ""))
                 
@@ -859,7 +1127,7 @@ class MortgageCalculatorApp:
                 current_tab.link_entry.insert(0, row.get("Link", ""))
 
                 current_tab.price_entry.delete(0, tk.END)
-                if not row.get("חשב מחיר נכס לפי הון עצמי"): # Only insert if not affordability calculation
+                if not row.get("חשב מחיר נכס לפי הון עצמי"): 
                     price_val = row.get("מחיר דירה (₪)")
                     if pd.notna(price_val):
                         current_tab.price_entry.insert(0, str(int(price_val)))
@@ -882,32 +1150,28 @@ class MortgageCalculatorApp:
                 current_tab.skip_tax_var.set(row.get("בטל מס רכישה") == "כן")
                 current_tab.include_tax_in_mortgage_var.set(row.get("כלול מס רכישה במשכנתא") == "כן")
 
-                # Manual lawyer fee
                 manual_lawyer = (row.get("הזן עלות עו\"ד ידנית") == "כן")
                 current_tab.manual_lawyer_fee_var.set(manual_lawyer)
-                current_tab._toggle_lawyer_fee_entry() # Update state of entry
+                current_tab._toggle_lawyer_fee_entry() 
                 if manual_lawyer and pd.notna(row.get("עלות עו\"ד ידנית")):
                     current_tab.lawyer_fee_manual_entry.delete(0, tk.END)
                     current_tab.lawyer_fee_manual_entry.insert(0, str(int(row["עלות עו\"ד ידנית"])))
 
-                # Broker fee
                 manual_broker = (row.get("הזן עלות מתווך ידנית") == "כן")
                 current_tab.manual_broker_fee_var.set(manual_broker)
-                current_tab._toggle_broker_fee_entry() # Update state of entry
+                current_tab._toggle_broker_fee_entry() 
                 if manual_broker and pd.notna(row.get("עלות מתווך ידנית")):
                     current_tab.broker_fee_manual_entry.delete(0, tk.END)
                     current_tab.broker_fee_manual_entry.insert(0, str(int(row["עלות מתווך ידנית"])))
                 current_tab.skip_broker_var.set(row.get("בטל עלות מתווך") == "כן")
 
-                # Affordability calculation
                 calc_afford = (row.get("חשב מחיר נכס לפי הון עצמי") == "כן")
                 current_tab.calculate_affordability_var.set(calc_afford)
-                current_tab._toggle_affordability_calculation() # Update state of entry
+                current_tab._toggle_affordability_calculation() 
                 if calc_afford and pd.notna(row.get("הון עצמי זמין (₪)")):
                     current_tab.available_funds_entry.delete(0, tk.END)
                     current_tab.available_funds_entry.insert(0, str(int(row["הון עצמי זמין (₪)"])))
                 
-                # Loan scenarios (rates and years)
                 for i in range(3):
                     rate_col = f"תרחיש {i+1} - ריבית שנתית (%)"
                     years_col = f"תרחיש {i+1} - שנים להחזר"
@@ -922,20 +1186,20 @@ class MortgageCalculatorApp:
                     if pd.notna(years_val):
                         current_tab.years_entries[i].insert(0, str(int(years_val)))
                 
-                # Re-run calculation for each loaded tab to populate results and graphs
                 current_tab.calculate() 
 
-            messagebox.showinfo("טעינה בוצעה", "הנתונים נטענו בהצלחה מקובץ Excel.", parent=self.root)
+            show_error_with_copy("טעינה בוצעה", "הנתונים נטענו בהצלחה מקובץ Excel.", parent=self.root)
 
         except Exception as e:
-            messagebox.showerror("שגיאה בטעינה", f"אירעה שגיאה בעת טעינת הנתונים: {e}", parent=self.root)
+            show_error_with_copy("שגיאה בטעינה", f"אירעה שגיאה בעת טעינת הנתונים: {e}", parent=self.root)
 
 
 if __name__ == "__main__":
     # Configure Matplotlib for Hebrew support
-    plt.rcParams['font.family'] = 'DejaVu Sans' # A common font that supports Hebrew
-    plt.rcParams['font.sans-serif'] = ['Arial Unicode MS', 'sans-serif'] # Fallback fonts
-    plt.rcParams['axes.unicode_minus'] = False # This is important to display minus signs correctly
+    # Using 'DejaVu Sans' as a fallback if 'Arial Unicode MS' is not available
+    plt.rcParams['font.family'] = 'DejaVu Sans' 
+    plt.rcParams['font.sans-serif'] = ['Arial Unicode MS', 'DejaVu Sans', 'sans-serif'] 
+    plt.rcParams['axes.unicode_minus'] = False 
 
     root = tk.Tk()
     app = MortgageCalculatorApp(root)
