@@ -496,12 +496,16 @@ class PropertyTab:
                 tolerance = 1.0
                 max_iterations = 100
                 current_iteration = 0
+                
+                
 
                 while current_iteration < max_iterations:
                     current_down_payment_ratio = (1 - ltv / 100)
-                    current_down_payment_from_price = estimated_price * current_down_payment_ratio
-                    current_purchase_tax = 0 if self.skip_tax_var.get() else calculate_purchase_tax(estimated_price)
-                    
+                    if self.include_tax_in_mortgage_var.get():
+                        include_tax_ind = True
+                        current_down_payment_from_price = (estimated_price ) * current_down_payment_ratio
+                        current_purchase_tax = 0  if self.skip_tax_var.get() else calculate_purchase_tax(estimated_price)
+                        
                     if self.manual_lawyer_fee_var.get():
                         lawyer_fee_val = float(self.lawyer_fee_manual_entry.get()) if self.lawyer_fee_manual_entry.get() else 0
                         current_lawyer_fee = lawyer_fee_val
@@ -517,8 +521,16 @@ class PropertyTab:
                         current_broker_fee = estimated_price * BROKER_FEE_RATE
 
                     if self.include_tax_in_mortgage_var.get():
-                        current_loan_amount_for_affordability = ((estimated_price + current_purchase_tax)* (ltv / 100)) 
-                        current_down_payment_for_affordability = estimated_price - current_loan_amount_for_affordability
+
+
+                # loan_amount_f=(price + purchase_tax)
+                # loan_amount = loan_amount_f* (ltv / 100)
+                # down_payment =( price + purchase_tax )* ((100-ltv) / 100)
+                        current_price_tax_f=calculate_purchase_tax(estimated_price)
+                        current_loan_amount_for_affordability_f=int(estimated_price + current_price_tax_f)
+                        current_loan_amount_for_affordability = (current_loan_amount_for_affordability_f * (ltv / 100)) 
+                        # current_down_payment_for_affordability = (estimated_price + current_purchase_tax) - current_loan_amount_for_affordability
+                        current_down_payment_for_affordability = (estimated_price + calculate_purchase_tax(estimated_price))* ((100-ltv) / 100)
                         current_total_funds_needed = current_down_payment_for_affordability + current_lawyer_fee + current_broker_fee
                     else:
                         current_total_funds_needed = current_down_payment_from_price + current_purchase_tax + current_lawyer_fee + current_broker_fee
